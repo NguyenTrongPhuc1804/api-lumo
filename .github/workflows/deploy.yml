@@ -1,0 +1,91 @@
+name: Deploy Server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Test & Install
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "server/package-lock.json"
+      
+      - name: Install dependencies
+        working-directory: ./server
+        run: npm install
+      
+      - name: Send Telegram notification (test passed)
+        if: success()
+        run: |
+          curl -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="✅ Server deploy: Test passed (${{ github.sha }})"
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    name: Deploy to VPS
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 103.167.89.132 >> ~/.ssh/known_hosts
+      
+      - name: Deploy via SSH
+        env:
+          VPS_USER: admin
+          VPS_IP: 103.167.89.132
+          VPS_PATH: /home/admin/api-lumo
+        run: |
+          ssh $VPS_USER@$VPS_IP << 'EOF'
+          set -e
+          
+          cd $VPS_PATH
+          
+          # Backup commit hiện tại
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          
+          # Pull code mới
+          git pull origin main
+          
+          # Install deps
+          npm install --production
+          
+          # Restart PM2
+          if pm2 list | grep -q "api-lumo"; then
+            pm2 restart api-lumo
+          else
+            pm2 start ecosystem.config.js
+          fi
+          
+          pm2 save
+          EOF
+      
+      - name: Send Telegram notification (deploy success)
+        if: success()
+        run: |
+          curl -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="🚀 Server deployed successfully (${{ github.sha }})"
+      
+      - name: Send Telegram notification (deploy failed)
+        if: failure()
+        run: |
+          curl -X POST https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TELEGRAM_CHAT_ID }} \
+            -d text="❌ Server deploy failed (${{ github.sha }})"
