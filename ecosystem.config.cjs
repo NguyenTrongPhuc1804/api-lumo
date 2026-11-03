@@ -1,8 +1,9 @@
 module.exports = {
     apps: [
         {
-            name: "lumo-server",
+            name: "api-lumo",
             script: "./src/index.js",
+            interpreter: "/home/admin/.nvm/versions/node/v22.23.4/bin/node",
             instances: 1,
             env: {
                 NODE_ENV: "production",
