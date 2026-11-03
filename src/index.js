@@ -8,6 +8,9 @@ import modelsRouter from "./routes/models.js";
 
 const app = express();
 
+// Chay sau nginx: tin 1 lop proxy de req.ip lay dung IP nguoi dung tu X-Forwarded-For
+app.set("trust proxy", 1);
+
 app.use(helmet());
 app.use(express.json({ limit: "200kb" }));
 
