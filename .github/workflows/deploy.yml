@@ -47,19 +47,22 @@ jobs:
           ssh admin@103.167.89.132 << 'EOF'
           set -e
           
+          export PATH=/home/admin/.nvm/versions/node/v22.23.4/bin:$PATH
+          export NODE_PATH=/home/admin/.nvm/versions/node/v22.23.4/lib/node_modules
+          
           cd /home/admin/api-lumo
           
           # Pull code mới
           git pull origin main
           
-          # Install deps (dùng full path)
-          /home/admin/.nvm/versions/node/v22.23.4/bin/npm install --production
+          # Install deps
+          npm install --production
           
-          # Restart PM2 với full node path
-          /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 restart api-lumo --interpreter=/home/admin/.nvm/versions/node/v22.23.4/bin/node || /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 start ecosystem.config.cjs --interpreter=/home/admin/.nvm/versions/node/v22.23.4/bin/node
+          # Restart PM2
+          pm2 restart api-lumo || pm2 start ecosystem.config.cjs
           
-          # Save PM2 config
-          /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 save
+          # Save
+          pm2 save
           EOF
       
       - name: Send Telegram notification (deploy success)
