@@ -47,10 +47,10 @@ jobs:
           ssh admin@103.167.89.132 << 'EOF'
           set -e
           
-          cd /home/admin/api-lumo
+          # Load bash profile để có npm
+          source ~/.bashrc
           
-          # Backup commit hiện tại
-          CURRENT_COMMIT=$(git rev-parse HEAD)
+          cd /home/admin/api-lumo
           
           # Pull code mới
           git pull origin main
