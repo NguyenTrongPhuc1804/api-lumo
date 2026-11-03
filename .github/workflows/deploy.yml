@@ -55,14 +55,11 @@ jobs:
           # Install deps (dùng full path)
           /home/admin/.nvm/versions/node/v22.23.4/bin/npm install --production
           
-          # Restart PM2
-          if pm2 list | grep -q "api-lumo"; then
-            pm2 restart api-lumo
-          else
-            pm2 start ecosystem.config.cjs
-          fi
+          # Restart PM2 với full node path
+          /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 restart api-lumo --interpreter=/home/admin/.nvm/versions/node/v22.23.4/bin/node || /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 start ecosystem.config.cjs --interpreter=/home/admin/.nvm/versions/node/v22.23.4/bin/node
           
-          pm2 save
+          # Save PM2 config
+          /home/admin/.nvm/versions/node/v22.23.4/bin/pm2 save
           EOF
       
       - name: Send Telegram notification (deploy success)
