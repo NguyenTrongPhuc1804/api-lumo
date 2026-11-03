@@ -3,9 +3,6 @@ name: Deploy Server
 on:
   push:
     branches: [main]
-    paths:
-      - "server/**"
-      - ".github/workflows/deploy.yml"
 
 jobs:
   test:
@@ -19,10 +16,9 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: "server/package-lock.json"
+          cache-dependency-path: "package-lock.json"
       
       - name: Install dependencies
-        working-directory: ./server
         run: npm install
       
       - name: Send Telegram notification (test passed)
