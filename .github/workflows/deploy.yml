@@ -58,8 +58,8 @@ jobs:
           # Install deps
           npm install --production
           
-          # Restart PM2
-          pm2 restart api-lumo || pm2 start ecosystem.config.cjs
+          # Restart PM2 (startOrReload để áp dụng lại ecosystem.config.cjs)
+          pm2 startOrReload ecosystem.config.cjs
           
           # Save
           pm2 save
