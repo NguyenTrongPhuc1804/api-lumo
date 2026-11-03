@@ -47,16 +47,13 @@ jobs:
           ssh admin@103.167.89.132 << 'EOF'
           set -e
           
-          # Load bash profile để có npm
-          source ~/.bashrc
-          
           cd /home/admin/api-lumo
           
           # Pull code mới
           git pull origin main
           
-          # Install deps
-          npm install --production
+          # Install deps (dùng full path)
+          /home/admin/.nvm/versions/node/v22.23.4/bin/npm install --production
           
           # Restart PM2
           if pm2 list | grep -q "api-lumo"; then
