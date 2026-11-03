@@ -43,15 +43,11 @@ jobs:
           ssh-keyscan -H 103.167.89.132 >> ~/.ssh/known_hosts
       
       - name: Deploy via SSH
-        env:
-          VPS_USER: admin
-          VPS_IP: 103.167.89.132
-          VPS_PATH: /home/admin/api-lumo
         run: |
-          ssh $VPS_USER@$VPS_IP << 'EOF'
+          ssh admin@103.167.89.132 << 'EOF'
           set -e
           
-          cd $VPS_PATH
+          cd /home/admin/api-lumo
           
           # Backup commit hiện tại
           CURRENT_COMMIT=$(git rev-parse HEAD)
