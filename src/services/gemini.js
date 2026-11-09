@@ -76,6 +76,7 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
   }
 
   const json = await res.json();
+  console.dir(json, { depth: null });
   const content = json.choices?.[0]?.message?.content;
   if (!content) {
     throw new Error("API khong tra ve noi dung");
@@ -86,8 +87,9 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
 // Goi thu 1 tu de kiem tra model co hoat dong khong truoc khi luu vao DB.
 // Dung max_tokens nho cho nhanh va re, khong gui temperature de model nao cung nhan.
 export async function verifyModel(model, customBaseUrl, customApiKey) {
+  console.log("verifyModel", model, customBaseUrl, customApiKey);
   return await callModel(model, ["Hello"], "en", "vi", customBaseUrl, customApiKey, {
-    maxTokens: 128,
+    maxTokens: 1024,
     temperature: null,
   });
 }
