@@ -20,8 +20,18 @@ function makeKey(sourceLang, targetLang, text, model) {
 // body: { texts: ["Hello", "World"], sourceLang: "auto", targetLang: "vi" }
 // tra ve: { translations: ["Xin chao", "The gioi"], cached: 1 }
 router.post("/translate", requireAppKey, async (req, res) => {
-  console.log("req.body", req.body);
-  const { texts, sourceLang = "auto", targetLang } = req.body;
+  const { texts, sourceLang = "auto", targetLang, mode = "game", context = [] } = req.body;
+  if (mode !== "game" && mode !== "manga") return res.status(400).json({ error: "Mode khong hop le" });
+  if (!Array.isArray(context) || context.length > 3 || context.some(turn =>
+    !Array.isArray(turn) || turn.length === 0 || turn.length > 3000 || turn.some(pair =>
+      !pair || typeof pair.source !== "string" || typeof pair.translation !== "string" ||
+      !pair.source.length || !pair.translation.length))) {
+    return res.status(400).json({ error: "Context khong hop le" });
+  }
+  const contextLength = context.reduce((total, turn) => total + turn.reduce((sum, pair) => sum + pair.source.length + pair.translation.length, 0), 0);
+  if (contextLength > 6000 || (mode === "game" && context.length > 0)) {
+    return res.status(400).json({ error: "Context vuot gioi han hoac khong dung mode" });
+  }
   const model = typeof req.body.model === "string" ? req.body.model : "";
 
   // 1. Kiem tra du lieu dau vao
@@ -36,8 +46,12 @@ router.post("/translate", requireAppKey, async (req, res) => {
   }
 
   try {
+    if (mode === "manga") {
+      const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context });
+      return res.json({ translations, cached: 0 });
+    }
     // 2. Tim ban dich da luu (neu Mongo dang chay)
-    const dbReady = mongoose.connection.readyState === 1;
+    const dbReady = mongoose.connection.readyState === 1 && mode === "game";
     const resultByText = new Map();
 
     if (dbReady) {
