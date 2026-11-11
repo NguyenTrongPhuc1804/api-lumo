@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 const aiModelSchema = new mongoose.Schema({
   code: { type: String, required: true, unique: true, trim: true }, // vi du: google/gemini-flash-lite
   name: { type: String, required: true, trim: true }, // ten hien thi, vi du: Gemini Flash-Lite (nhanh)
+  description: { type: String, default: "", trim: true, maxlength: 500 },
   baseUrl: { type: String, default: "", trim: true }, // de trong thi dung REVID_BASE_URL trong .env
   apiKey: { type: String, default: "", trim: true }, // de trong thi dung REVID_API_KEY trong .env
   enabled: { type: Boolean, default: true },

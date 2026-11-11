@@ -12,9 +12,9 @@ function maskKey(key) {
   return key.length > 8 ? `${key.slice(0, 3)}...${key.slice(-4)}` : "********";
 }
 
-function toClient(doc, withKey) {
-  const { _id, code, name, baseUrl, apiKey, enabled, order } = doc;
-  return withKey ? { id: _id, code, name, baseUrl, apiKey: maskKey(apiKey), enabled, order } : { code, name };
+export function toClient(doc, withKey) {
+  const { _id, code, name, baseUrl, apiKey, enabled, order, description = "" } = doc;
+  return withKey ? { id: _id, code, name, description, baseUrl, apiKey: maskKey(apiKey), enabled, order } : { code, name, description };
 }
 
 // Bo ky tu dieu khien hay bi dinh khi dan tu clipboard (vd \u0016 o dau chuoi)
@@ -22,8 +22,21 @@ function cleanText(value) {
   return String(value).replace(/[\u0000-\u001F\u007F]/g, "").trim();
 }
 
-function readModelFields(body) {
+export function readModelFields(body) {
   const fields = {};
+  if (Object.hasOwn(body, "description")) {
+    if (typeof body.description !== "string") {
+      const error = new Error("Mô tả phải là chuỗi văn bản");
+      error.status = 400;
+      throw error;
+    }
+    fields.description = body.description.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim();
+    if (fields.description.length > 500) {
+      const error = new Error("Mô tả tối đa 500 ký tự");
+      error.status = 400;
+      throw error;
+    }
+  }
   for (const key of ["code", "name", "baseUrl", "apiKey"]) {
     if (typeof body[key] === "string" && body[key].trim()) fields[key] = cleanText(body[key]);
   }
@@ -98,6 +111,7 @@ router.post("/admin/models", requireAdminKey, async (req, res) => {
   const created = await AiModel.create({
     code: code.trim(),
     name: name.trim(),
+    description: fields.description ?? "",
     baseUrl: typeof baseUrl === "string" ? baseUrl.trim() : "",
     apiKey: typeof apiKey === "string" ? apiKey.trim() : "",
     enabled: Boolean(enabled),
@@ -152,6 +166,12 @@ router.delete("/admin/models/:id", requireAdminKey, async (req, res) => {
   }
 
   res.json({ ok: true });
+});
+
+// Chi chuyen loi validation cua metadata thanh JSON; loi khac de middleware hien co xu ly.
+router.use((error, req, res, next) => {
+  if (error.status === 400) return res.status(400).json({ error: error.message });
+  next(error);
 });
 
 export default router;
