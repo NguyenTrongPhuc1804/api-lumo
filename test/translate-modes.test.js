@@ -58,6 +58,7 @@ test('rejects invalid modes and context before model calls', async () => {
   await new Promise(resolve => server.once('listening', resolve));
   try {
     const invalid = [
+      { mode: 'manga', context: [[{ source: 'a', translation: 'b', extra: 'x'.repeat(7000) }]] },
       { mode: 'unknown' },
       { mode: 'manga', context: 'bad' },
       { mode: 'manga', context: [[{ source: 42, translation: 'a' }]] },

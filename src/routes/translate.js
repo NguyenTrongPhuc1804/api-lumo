@@ -24,7 +24,7 @@ router.post("/translate", requireAppKey, async (req, res) => {
   if (mode !== "game" && mode !== "manga") return res.status(400).json({ error: "Mode khong hop le" });
   if (!Array.isArray(context) || context.length > 3 || context.some(turn =>
     !Array.isArray(turn) || turn.length === 0 || turn.length > 3000 || turn.some(pair =>
-      !pair || typeof pair.source !== "string" || typeof pair.translation !== "string" ||
+      !pair || Object.keys(pair).some(key => key !== "source" && key !== "translation") || typeof pair.source !== "string" || typeof pair.translation !== "string" ||
       !pair.source.length || !pair.translation.length))) {
     return res.status(400).json({ error: "Context khong hop le" });
   }
