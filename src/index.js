@@ -10,6 +10,13 @@ import { createAdminUsersRouter } from "./routes/adminUsers.js";
 
 const app = express();
 
+// Thieu JWT_SECRET thi moi request dang nhap se 500 hoac 401 kho hieu.
+// Bao loi ro rang ngay luc khoi dong con hon de nguoi dung gap loi bi an.
+if (!process.env.JWT_SECRET) {
+  console.error("Thieu JWT_SECRET trong .env. Sinh bang: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");
+  process.exit(1);
+}
+
 // Chay sau nginx: tin 1 lop proxy de req.ip lay dung IP nguoi dung tu X-Forwarded-For
 app.set("trust proxy", 1);
 

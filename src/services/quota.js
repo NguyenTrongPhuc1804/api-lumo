@@ -15,7 +15,7 @@ export function limitFor(user) {
 
 // Tru luot theo kieu tang nguyen tu (atomic), de hai request dong thoi
 // khong cung lot qua han muc.
-// Tra ve { ok: true, remaining } hoac { ok: false, remaining: 0 }.
+// Tra ve { ok: true, remaining, usageDate } hoac { ok: false, remaining: 0 }.
 export async function consumeQuota(user, cost = 1) {
   const limit = limitFor(user);
   const today = todayKey();
@@ -26,7 +26,7 @@ export async function consumeQuota(user, cost = 1) {
     { $inc: { usageCount: cost } },
     { new: true }
   );
-  if (updated) return { ok: true, remaining: Math.max(0, limit - updated.usageCount) };
+  if (updated) return { ok: true, remaining: Math.max(0, limit - updated.usageCount), usageDate: today };
 
   // Nhanh 2: sang ngay moi thi dat lai bo dem.
   const reset = await User.findOneAndUpdate(
@@ -34,16 +34,30 @@ export async function consumeQuota(user, cost = 1) {
     { $set: { usageDate: today, usageCount: cost } },
     { new: true }
   );
-  if (reset) return { ok: true, remaining: Math.max(0, limit - reset.usageCount) };
+  if (reset) return { ok: true, remaining: Math.max(0, limit - reset.usageCount), usageDate: today };
 
-  // Cả hai nhánh trượt: hoặc đã hết lượt, hoặc một request khác vừa đổi ngày.
-  return { ok: false, remaining: 0 };
+  // Nhanh 3: mot request khac vua dat lai ngay truoc do, nen thu lai nhanh 1.
+  // Khong co nhanh nay thi request thu hai trong ngay moi bi tra 429 oan.
+  const retried = await User.findOneAndUpdate(
+    { _id: user._id, usageDate: today, usageCount: { $lt: limit } },
+    { $inc: { usageCount: cost } },
+    { new: true }
+  );
+  if (retried) return { ok: true, remaining: Math.max(0, limit - retried.usageCount), usageDate: today };
+
+  return { ok: false, remaining: 0, usageDate: today };
 }
 
 // Hoan lai luot khi goi model that bai, de nguoi dung khong bi tru oan.
-export async function refundQuota(user, cost = 1) {
+// Chi hoan neu bo dem van con o dung ngay da tru: neu da sang ngay moi
+// thi bo dem da reset, tru them se lam am hoac an luot cua ngay moi.
+export async function refundQuota(user, usageDate, cost = 1) {
+  if (!usageDate) return;
   try {
-    await User.updateOne({ _id: user._id }, { $inc: { usageCount: -cost } });
+    await User.updateOne(
+      { _id: user._id, usageDate, usageCount: { $gte: cost } },
+      { $inc: { usageCount: -cost } }
+    );
   } catch (err) {
     console.warn("Hoan luot that bai:", err.message);
   }

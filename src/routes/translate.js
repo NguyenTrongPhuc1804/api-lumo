@@ -48,24 +48,24 @@ router.post("/translate", requireUser, async (req, res) => {
 
   const isAdmin = req.user.role === "admin";
   const limit = limitFor(req.user);
-  // Tinh luot con lai de tra ve cho app, khong dung cho viec quyet dinh.
-  const remainingNow = () => {
-    const used = req.user.usageDate === todayKey() ? req.user.usageCount : 0;
-    return Math.max(0, limit - used);
-  };
+  // So luot con lai tra cho app. Cap nhat lai sau moi lan tru de khong lech.
+  let remaining = req.user.usageDate === todayKey() ? Math.max(0, limit - req.user.usageCount) : limit;
 
   try {
     if (mode === "manga") {
       // Manga khong dung cache nen moi lan quet la mot luot that.
+      let chargedDate = "";
       if (!isAdmin) {
         const quota = await consumeQuota(req.user);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
+        remaining = quota.remaining;
+        chargedDate = quota.usageDate;
       }
       try {
         const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context });
-        return res.json({ translations, cached: 0, remaining: isAdmin ? null : remainingNow() });
+        return res.json({ translations, cached: 0, remaining: isAdmin ? null : remaining });
       } catch (err) {
-        if (!isAdmin) await refundQuota(req.user);
+        if (!isAdmin) await refundQuota(req.user, chargedDate);
         throw err;
       }
     }
@@ -87,9 +87,12 @@ router.post("/translate", requireUser, async (req, res) => {
 
     if (missing.length > 0) {
       // Chi tru luot khi that su phai goi model. Trung cache thi khong ton tien.
+      let chargedDate = "";
       if (!isAdmin) {
         const quota = await consumeQuota(req.user);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
+        remaining = quota.remaining;
+        chargedDate = quota.usageDate;
       }
 
       let translated;
@@ -97,7 +100,7 @@ router.post("/translate", requireUser, async (req, res) => {
         translated = await translateBatch(missing, sourceLang, targetLang, model);
       } catch (err) {
         // Goi model that bai thi tra lai luot da tru.
-        if (!isAdmin) await refundQuota(req.user);
+        if (!isAdmin) await refundQuota(req.user, chargedDate);
         throw err;
       }
 
@@ -117,7 +120,7 @@ router.post("/translate", requireUser, async (req, res) => {
     }
 
     // 5. Tra ket qua dung thu tu cua request
-    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin ? null : remainingNow() });
+    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin ? null : remaining });
   } catch (err) {
     console.error("Dich loi:", err.message);
     res.status(502).json({ error: "Khong dich duoc, thu lai sau" });

@@ -3,12 +3,17 @@ import jwt from "jsonwebtoken";
 import { findOrCreateUser, signToken } from "../services/tokens.js";
 import { exchangeGoogleCode as realExchangeGoogleCode } from "../services/google.js";
 import { requireUser } from "../middleware/auth.js";
+import { limitFor, todayKey } from "../services/quota.js";
 
 // Ten tham so trong duong dan, tranh go nham o nhieu cho
 const STATE_TTL = "10m";
 
 // Hop le hoa mot user thanh JSON tra cho app. Khong bao gio tra providerId.
+// Han muc phai dung limitFor() vi dailyLimit = 0 nghia la "lay tu .env",
+// neu tra thang 0 thi app hieu nham la khong gioi han.
 export function toClientUser(user) {
+  // Bo dem chi co nghia trong ngay cua no; sang ngay moi thi coi nhu 0.
+  const usedToday = user.usageDate === todayKey() ? user.usageCount ?? 0 : 0;
   return {
     id: String(user._id ?? user.id ?? ""),
     email: user.email ?? "",
@@ -17,8 +22,8 @@ export function toClientUser(user) {
     role: user.role ?? "user",
     plan: user.plan ?? "free",
     isAdmin: user.role === "admin",
-    dailyLimit: user.dailyLimit ?? 0,
-    usageCount: user.usageCount ?? 0,
+    dailyLimit: limitFor(user),
+    usageCount: usedToday,
     usageDate: user.usageDate ?? "",
   };
 }
