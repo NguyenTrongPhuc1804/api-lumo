@@ -1,7 +1,7 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
-import { requireAppKey, requireAdminKey } from "../middleware/auth.js";
+import { requireAppKey, requireAdminUser } from "../middleware/auth.js";
 import { verifyModel } from "../services/gemini.js";
 
 const router = Router();
@@ -55,7 +55,7 @@ router.get("/models", requireAppKey, async (req, res) => {
 });
 
 // GET /api/admin/models - Lay toan bo model (ke ca da tat), apiKey chi tra dang che
-router.get("/admin/models", requireAdminKey, async (req, res) => {
+router.get("/admin/models", requireAdminUser, async (req, res) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
@@ -65,7 +65,7 @@ router.get("/admin/models", requireAdminKey, async (req, res) => {
 
 // POST /api/admin/models/verify - Kiem tra mot model voi baseUrl va apiKey dang nhap, khong luu gi.
 // De trong apiKey thi dung key da luu cua model (truong hop sua ten ma khong doi key).
-router.post("/admin/models/verify", requireAdminKey, async (req, res) => {
+router.post("/admin/models/verify", requireAdminUser, async (req, res) => {
   const { id, model, baseUrl, apiKey } = req.body;
   if (!model || typeof model !== "string" || !model.trim()) {
     return res.status(400).json({ ok: false, error: "Thieu ma model" });
@@ -86,7 +86,7 @@ router.post("/admin/models/verify", requireAdminKey, async (req, res) => {
 });
 
 // POST /api/admin/models - Tao model moi, goi thu model truoc khi luu
-router.post("/admin/models", requireAdminKey, async (req, res) => {
+router.post("/admin/models", requireAdminUser, async (req, res) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
@@ -122,7 +122,7 @@ router.post("/admin/models", requireAdminKey, async (req, res) => {
 });
 
 // PUT /api/admin/models/:id - Sua model. Neu doi key hoac baseUrl thi goi thu lai
-router.put("/admin/models/:id", requireAdminKey, async (req, res) => {
+router.put("/admin/models/:id", requireAdminUser, async (req, res) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
@@ -155,7 +155,7 @@ router.put("/admin/models/:id", requireAdminKey, async (req, res) => {
 });
 
 // DELETE /api/admin/models/:id - Xoa model
-router.delete("/admin/models/:id", requireAdminKey, async (req, res) => {
+router.delete("/admin/models/:id", requireAdminUser, async (req, res) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }

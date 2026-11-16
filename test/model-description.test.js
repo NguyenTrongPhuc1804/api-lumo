@@ -4,6 +4,8 @@ import modelRouter, { readModelFields, toClient } from "../src/routes/models.js"
 import express from "express";
 import mongoose from "mongoose";
 import { AiModel } from "../src/models/AiModel.js";
+import { User } from "../src/models/User.js";
+import { signToken } from "../src/services/tokens.js";
 
 test("description preserves lines, clears explicitly and validates type/length", () => {
   assert.equal(readModelFields({ description: "  Dịch manga\nTiếng Việt  " }).description, "Dịch manga\nTiếng Việt");
@@ -21,13 +23,14 @@ test("description round trips without leaking full keys, old records default emp
   assert.equal(toClient({ code: "old", name: "Old" }, false).description, "");
 });
 test("invalid descriptions return JSON 400; description-only PUT persists without verification", async () => {
-  const previousKey = process.env.ADMIN_KEY;
-  process.env.ADMIN_KEY = "test-admin";
+  process.env.JWT_SECRET = "test-secret";
   const state = mongoose.connection.readyState;
   mongoose.connection.readyState = 1;
   const findById = AiModel.findById;
+  const userFindById = User.findById;
   const saved = { code: "test", name: "Test", baseUrl: "", apiKey: "", description: "Old", async save() {}, toObject() { return { ...this }; } };
   AiModel.findById = async () => saved;
+  User.findById = async () => ({ _id: "admin-1", role: "admin", status: "active" });
   const app = express();
   app.use(express.json());
   app.use('/api', modelRouter);
@@ -35,7 +38,7 @@ test("invalid descriptions return JSON 400; description-only PUT persists withou
   try {
     await new Promise((resolve) => server.once('listening', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
-    const headers = { 'Content-Type': 'application/json', 'x-admin-key': 'test-admin' };
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${signToken("admin-1")}` };
     const bad = await fetch(`${base}/api/admin/models`, { method: 'POST', headers, body: JSON.stringify({ description: 'a'.repeat(501) }) });
     assert.equal(bad.status, 400);
     assert.match(bad.headers.get('content-type'), /json/);
@@ -48,8 +51,8 @@ test("invalid descriptions return JSON 400; description-only PUT persists withou
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     AiModel.findById = findById;
+    User.findById = userFindById;
     mongoose.connection.readyState = state;
-    if (previousKey === undefined) delete process.env.ADMIN_KEY; else process.env.ADMIN_KEY = previousKey;
   }
 });
 

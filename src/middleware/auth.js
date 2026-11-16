@@ -60,15 +60,3 @@ export async function requireAdminUser(req, res, next) {
     next();
   });
 }
-
-// Tam giu trong luc chuyen tiep; Task 4 se xoa cung voi ADMIN_KEY.
-export function requireAdminKey(req, res, next) {
-  const expected = Buffer.from(process.env.ADMIN_KEY || "");
-  const received = Buffer.from(req.get("x-admin-key") || "");
-
-  const isValid = expected.length > 0 && expected.length === received.length && timingSafeEqual(expected, received);
-  if (!isValid) {
-    return res.status(401).json({ error: "Sai hoac thieu x-admin-key" });
-  }
-  next();
-}
