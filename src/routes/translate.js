@@ -3,7 +3,8 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { Translation } from "../models/Translation.js";
 import { translateBatch } from "../services/gemini.js";
-import { requireAppKey } from "../middleware/auth.js";
+import { requireUser } from "../middleware/auth.js";
+import { consumeQuota, limitFor, refundQuota, todayKey } from "../services/quota.js";
 
 const router = Router();
 
@@ -19,7 +20,7 @@ function makeKey(sourceLang, targetLang, text, model) {
 // POST /api/translate
 // body: { texts: ["Hello", "World"], sourceLang: "auto", targetLang: "vi" }
 // tra ve: { translations: ["Xin chao", "The gioi"], cached: 1 }
-router.post("/translate", requireAppKey, async (req, res) => {
+router.post("/translate", requireUser, async (req, res) => {
   const { texts, sourceLang = "auto", targetLang, mode = "game", context = [] } = req.body;
   if (mode !== "game" && mode !== "manga") return res.status(400).json({ error: "Mode khong hop le" });
   if (!Array.isArray(context) || context.length > 3 || context.some(turn =>
@@ -45,10 +46,28 @@ router.post("/translate", requireAppKey, async (req, res) => {
     return res.status(400).json({ error: "Thieu sourceLang hoac targetLang" });
   }
 
+  const isAdmin = req.user.role === "admin";
+  const limit = limitFor(req.user);
+  // Tinh luot con lai de tra ve cho app, khong dung cho viec quyet dinh.
+  const remainingNow = () => {
+    const used = req.user.usageDate === todayKey() ? req.user.usageCount : 0;
+    return Math.max(0, limit - used);
+  };
+
   try {
     if (mode === "manga") {
-      const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context });
-      return res.json({ translations, cached: 0 });
+      // Manga khong dung cache nen moi lan quet la mot luot that.
+      if (!isAdmin) {
+        const quota = await consumeQuota(req.user);
+        if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
+      }
+      try {
+        const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context });
+        return res.json({ translations, cached: 0, remaining: isAdmin ? null : remainingNow() });
+      } catch (err) {
+        if (!isAdmin) await refundQuota(req.user);
+        throw err;
+      }
     }
     // 2. Tim ban dich da luu (neu Mongo dang chay)
     const dbReady = mongoose.connection.readyState === 1 && mode === "game";
@@ -67,7 +86,20 @@ router.post("/translate", requireAppKey, async (req, res) => {
     const missing = [...new Set(texts.filter((t) => !resultByText.has(t)))];
 
     if (missing.length > 0) {
-      const translated = await translateBatch(missing, sourceLang, targetLang, model);
+      // Chi tru luot khi that su phai goi model. Trung cache thi khong ton tien.
+      if (!isAdmin) {
+        const quota = await consumeQuota(req.user);
+        if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
+      }
+
+      let translated;
+      try {
+        translated = await translateBatch(missing, sourceLang, targetLang, model);
+      } catch (err) {
+        // Goi model that bai thi tra lai luot da tru.
+        if (!isAdmin) await refundQuota(req.user);
+        throw err;
+      }
 
       missing.forEach((text, i) => resultByText.set(text, translated[i]));
 
@@ -85,7 +117,7 @@ router.post("/translate", requireAppKey, async (req, res) => {
     }
 
     // 5. Tra ket qua dung thu tu cua request
-    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount });
+    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin ? null : remainingNow() });
   } catch (err) {
     console.error("Dich loi:", err.message);
     res.status(502).json({ error: "Khong dich duoc, thu lai sau" });

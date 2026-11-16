@@ -5,14 +5,27 @@ import router from '../src/routes/translate.js';
 import mongoose from 'mongoose';
 import { AiModel } from '../src/models/AiModel.js';
 import { Translation } from '../src/models/Translation.js';
+import { User } from '../src/models/User.js';
+import { signToken } from '../src/services/tokens.js';
+
+// Tai khoan admin de khong bi tru luot trong cac test nay.
+const admin = { _id: 'admin-1', role: 'admin', status: 'active', dailyLimit: 0, usageDate: '', usageCount: 0 };
+
+function stubIdentity() {
+  const previous = { findById: User.findById, findOneAndUpdate: User.findOneAndUpdate, updateOne: User.updateOne };
+  User.findById = async (id) => (id === admin._id ? admin : null);
+  User.findOneAndUpdate = async () => admin;
+  User.updateOne = async () => ({ acknowledged: true });
+  process.env.JWT_SECRET = 'test-secret';
+  return () => Object.assign(User, previous);
+}
 
 test('manga preserves duplicate items and supplies context without Mongo translation cache', async () => {
-  const previousKey = process.env.APP_KEY;
   const previousState = mongoose.connection.readyState;
   const findOne = AiModel.findOne;
   const find = Translation.find;
   const originalFetch = globalThis.fetch;
-  process.env.APP_KEY = 'test-key';
+  const restoreIdentity = stubIdentity();
   mongoose.connection.readyState = 1;
   AiModel.findOne = () => ({ lean: async () => ({ code: 'test', baseUrl: 'https://model.test', apiKey: 'secret' }) });
   Translation.find = () => { throw new Error('Manga must not read translation cache'); };
@@ -31,7 +44,7 @@ test('manga preserves duplicate items and supplies context without Mongo transla
   await new Promise(resolve => server.once('listening', resolve));
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/translate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-app-key': 'test-key' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signToken(admin._id)}` },
       body: JSON.stringify({ texts: ['You', 'You'], targetLang: 'vi', model: 'test', mode: 'manga', context: [[{ source: 'Brother', translation: 'Anh trai' }]] }),
     });
     assert.equal(response.status, 200);
@@ -42,15 +55,14 @@ test('manga preserves duplicate items and supplies context without Mongo transla
     AiModel.findOne = findOne;
     Translation.find = find;
     mongoose.connection.readyState = previousState;
-    if (previousKey === undefined) delete process.env.APP_KEY; else process.env.APP_KEY = previousKey;
+    restoreIdentity();
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }
 });
 
 test('rejects invalid modes and context before model calls', async () => {
-  const previous = process.env.APP_KEY;
-  process.env.APP_KEY = 'test-key';
+  const restoreIdentity = stubIdentity();
   const app = express();
   app.use(express.json());
   app.use('/api', router);
@@ -69,14 +81,14 @@ test('rejects invalid modes and context before model calls', async () => {
     for (const options of invalid) {
       const response = await fetch(`http://127.0.0.1:${server.address().port}/api/translate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-app-key': 'test-key' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signToken(admin._id)}` },
         body: JSON.stringify({ texts: ['Hi'], targetLang: 'vi', model: 'test', ...options }),
       });
       assert.equal(response.status, 400, JSON.stringify(options));
     }
   } finally {
+    restoreIdentity();
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
-    if (previous === undefined) delete process.env.APP_KEY; else process.env.APP_KEY = previous;
   }
 });
