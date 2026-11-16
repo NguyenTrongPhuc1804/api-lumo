@@ -6,6 +6,7 @@ import { requireAppKey } from "./middleware/auth.js";
 import translateRouter from "./routes/translate.js";
 import modelsRouter from "./routes/models.js";
 import { createAuthRouter } from "./routes/auth.js";
+import { createAdminUsersRouter } from "./routes/adminUsers.js";
 
 const app = express();
 
@@ -30,6 +31,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/api", createAuthRouter());
+app.use("/api", createAdminUsersRouter());
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 
