@@ -5,6 +5,7 @@ import mongoose from "mongoose";
 import { requireAppKey } from "./middleware/auth.js";
 import translateRouter from "./routes/translate.js";
 import modelsRouter from "./routes/models.js";
+import { createAuthRouter } from "./routes/auth.js";
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, db: mongoose.connection.readyState === 1 });
 });
 
+app.use("/api", createAuthRouter());
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 
