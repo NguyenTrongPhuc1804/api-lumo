@@ -15,6 +15,11 @@ for (const file of ["privacy.html", "terms.html", "account-deletion.html"]) {
       assert.match(res.headers.get("content-type"), /text\/html/);
       const html = await res.text();
       assert.match(html, /Lumo Lens/);
+      assert.match(html, /href="mailto:phucnguyentrong1804@gmail\.com"/);
+      assert.doesNotMatch(html, /đang chờ chủ ứng dụng|khi có địa chỉ liên hệ/i);
+      if (file === "account-deletion.html") {
+        assert.match(html, /3 ngày kể từ khi nhận được yêu cầu/i);
+      }
       assert.match(html, /chưa qua tư vấn pháp lý/i);
       assert.doesNotMatch(html, /<script|(?:src|href)=["']https?:/i);
     } finally {
