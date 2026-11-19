@@ -1,4 +1,6 @@
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import mongoose from "mongoose";
@@ -28,6 +30,10 @@ app.use((req, res, next) => {
   res.on("finish", () => console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${req.ip})`));
   next();
 });
+
+// Trang phap ly cong khai, khong qua auth hay rate limit.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+app.use("/legal", express.static(path.join(__dirname, "../public/legal")));
 
 // Gioi han 60 request moi phut cho moi IP
 app.use(rateLimit({ windowMs: 60 * 1000, limit: 60 }));

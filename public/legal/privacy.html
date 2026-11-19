@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chính sách quyền riêng tư — Lumo Lens</title>
+<style>body{font-family:system-ui,sans-serif;line-height:1.7;color:#172b27;background:#f5faf8;max-width:800px;margin:auto;padding:24px}main{background:white;padding:24px;border-radius:16px}h1,h2{line-height:1.3}a{color:#047857}.note{padding:16px;background:#fff7db;border:1px solid #e9ca70;border-radius:8px}</style>
+</head>
+<body><main>
+<h1>Chính sách quyền riêng tư — Lumo Lens</h1>
+<p class="note">Đây là bản nháp do người phát triển soạn dựa trên hoạt động thực tế của ứng dụng, <strong>chưa qua tư vấn pháp lý</strong>. Cần rà soát nội dung và bổ sung email liên hệ thật trước khi phát hành.</p>
+<p>Cập nhật: 19/11/2026. Chính sách này mô tả dữ liệu được xử lý khi bạn sử dụng Lumo Lens để dịch chữ trên màn hình.</p>
+<h2>1. Thông tin tài khoản</h2>
+<p>Khi đăng nhập Google, ứng dụng nhận mã định danh Google, email, tên và ảnh đại diện để tạo và xác thực tài khoản. Server lưu thông tin này cùng vai trò, trạng thái tài khoản, gói sử dụng và bộ đếm lượt dịch theo ngày trong MongoDB. Ứng dụng không nhận mật khẩu Google.</p>
+<p>Token đăng nhập được lưu trong kho bảo mật của thiết bị (SecureStore), có thời hạn 30 ngày. Cấu hình ứng dụng được lưu trên thiết bị. Thông tin tài khoản được giữ đến khi tài khoản bị xoá.</p>
+<h2>2. Chữ nhận dạng và nhà cung cấp AI bên thứ ba</h2>
+<p>Chữ đọc được từ màn hình được gửi tới server để dịch; khi cần gọi model, server chuyển chữ cùng ngữ cảnh cần thiết tới nhà cung cấp model AI bên thứ ba được cấu hình. Việc xử lý tại bên thứ ba còn tuân theo chính sách của nhà cung cấp đó. Không nên dịch nội dung chứa mật khẩu, thông tin tài chính hoặc dữ liệu nhạy cảm.</p>
+<h2>3. Ảnh màn hình chỉ xử lý trên máy</h2>
+<p>Ảnh chụp màn hình được xử lý trên thiết bị để nhận dạng chữ (OCR), không được gửi tới server hay nhà cung cấp AI. Chỉ phần chữ cần dịch được gửi đi.</p>
+<h2>4. Các quyền của thiết bị</h2>
+<p>Quyền chụp màn hình dùng để lấy nội dung bạn muốn dịch. Quyền vẽ trên ứng dụng khác dùng để hiển thị nút dịch nổi và bản dịch. Bạn có thể dừng dịch và thu hồi quyền trong cài đặt hệ thống; khi đó các chức năng tương ứng sẽ không hoạt động.</p>
+<h2>5. Lưu trữ bản dịch</h2>
+<p>Server lưu cache bản dịch dùng chung theo nội dung, không gắn với tài khoản. Cache được thiết lập tự xoá sau 30 ngày bằng TTL của MongoDB; việc dọn thực tế có thể chậm hơn mốc hết hạn. Xoá tài khoản không đồng nghĩa xoá cache dùng chung này.</p>
+<h2>6. Quyền của bạn</h2>
+<p>Bạn có thể xem thông tin tài khoản trong ứng dụng, đăng xuất để xoá token trên máy, hoặc <a href="account-deletion.html">xoá tài khoản vĩnh viễn</a>. Nếu đăng nhập lại sau khi xoá, một tài khoản mới sẽ được tạo.</p>
+<h2>7. Liên hệ</h2>
+<p class="note">Email hỗ trợ và nhận yêu cầu về dữ liệu đang chờ chủ ứng dụng cung cấp. Bản nháp này chưa sẵn sàng dùng cho hồ sơ phát hành Google Play.</p>
+<nav aria-label="Trang pháp lý"><a href="terms.html">Điều khoản sử dụng</a> · <a href="account-deletion.html">Xoá tài khoản</a></nav>
+</main></body>
+</html>
