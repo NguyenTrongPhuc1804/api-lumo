@@ -41,7 +41,7 @@ export async function requireUser(req, res, next) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
   if (!user) {
-    return res.status(401).json({ error: "Phiên đăng nhập đã hết hạn" });
+    return res.status(401).json({ error: "Phiên đăng nhập đã hết hạn", code: "ACCOUNT_NOT_FOUND" });
   }
   if (user.status === "blocked") {
     return res.status(403).json({ error: "Tài khoản đã bị khoá" });

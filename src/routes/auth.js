@@ -1,5 +1,6 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
+import { User } from "../models/User.js";
 import { findOrCreateUser, signToken } from "../services/tokens.js";
 import { exchangeGoogleCode as realExchangeGoogleCode } from "../services/google.js";
 import { requireUser } from "../middleware/auth.js";
@@ -94,6 +95,17 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
   router.get("/auth/facebook/callback", (req, res) => res.status(501).json({ error: "Chưa bật đăng nhập Facebook" }));
 
   router.get("/me", requireUser, (req, res) => res.json(toClientUser(req.user)));
+
+  // Translation la cache dung chung, khong gan voi user nen khong xoa day chuyen.
+  router.delete("/me", requireUser, async (req, res) => {
+    try {
+      const result = await User.deleteOne({ _id: req.user._id });
+      if (result.deletedCount === 0) return res.status(404).json({ error: "Khong tim thay tai khoan" });
+      res.json({ ok: true });
+    } catch {
+      res.status(503).json({ error: "Database chua ket noi" });
+    }
+  });
 
   return router;
 }
