@@ -7,7 +7,7 @@ import mongoose from "mongoose";
 import { User } from "./models/User.js";
 import { DailyQuota } from "./models/DailyQuota.js";
 import translateRouter from "./routes/translate.js";
-import modelsRouter from "./routes/models.js";
+import modelsRouter, { createAdminModelsRouter } from "./routes/models.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createAdminUsersRouter } from "./routes/adminUsers.js";
 import { createAdminWebAuth } from "./routes/adminWebAuth.js";
@@ -56,6 +56,7 @@ app.use("/api", createAuthRouter());
 app.use("/api", createAdminUsersRouter());
 app.use("/api/admin-web/auth", adminWeb.router);
 app.use("/api/admin-web", createAdminUsersRouter({ prefix: "", authorize: adminWeb.requireSession }));
+app.use("/api/admin-web", createAdminModelsRouter({ prefix: "", authorize: adminWeb.requireSession, web: true }));
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 

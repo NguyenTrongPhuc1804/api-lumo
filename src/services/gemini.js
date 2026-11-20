@@ -69,9 +69,11 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
     },
     body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(30000),
+    ...(opts.webVerification && { redirect: "error" }),
   });
 
   if (!res.ok) {
+    if (opts.webVerification) throw new Error("Kiem tra model that bai");
     const errorBody = await res.text().catch(() => "");
     throw new Error(`API tra ve ${res.status}: ${errorBody.slice(0, 600)}`);
   }
@@ -86,11 +88,11 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
 
 // Goi thu 1 tu de kiem tra model co hoat dong khong truoc khi luu vao DB.
 // Dung max_tokens nho cho nhanh va re, khong gui temperature de model nao cung nhan.
-export async function verifyModel(model, customBaseUrl, customApiKey) {
-  console.log("verifyModel", model, customBaseUrl, customApiKey);
+export async function verifyModel(model, customBaseUrl, customApiKey, webVerification = false) {
   return await callModel(model, ["Hello"], "en", "vi", customBaseUrl, customApiKey, {
     maxTokens: 1024,
     temperature: null,
+    webVerification,
   });
 }
 
