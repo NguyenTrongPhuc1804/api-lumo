@@ -16,11 +16,15 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
   const https = Boolean(origin?.startsWith('https://'));
   const local = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? '');
   const enabled = Boolean(username && credentials && (https || (config.NODE_ENV !== 'production' && local)));
+  const allowAnyOrigin = config.NODE_ENV === 'development' && config.ADMIN_WEB_ALLOW_ANY_ORIGIN === 'true';
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: https, path: '/' };
   const loginLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, message: { error: 'Quá nhiều lần đăng nhập. Vui lòng thử lại sau.' } });
 
   function requireOrigin(req, res, next) {
-    if (!origin || req.get('origin') !== origin) return res.status(403).json({ error: 'Nguồn yêu cầu không hợp lệ' });
+    const requestOrigin = req.get('origin');
+    if (requestOrigin !== origin && !(allowAnyOrigin && /^https?:\/\/[^\s/,]+$/.test(requestOrigin ?? ''))) {
+      return res.status(403).json({ error: 'Nguồn yêu cầu không hợp lệ' });
+    }
     next();
   }
 
@@ -38,9 +42,10 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
   }
 
   router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-  router.post('/login', loginLimit, async (req, res) => {
+  router.post('/login', loginLimit, (_req, res, next) => {
     if (!enabled) return res.status(503).json({ error: 'Chưa cấu hình đăng nhập web quản trị' });
-    if (req.get('origin') !== origin) return res.status(403).json({ error: 'Nguồn yêu cầu không hợp lệ' });
+    next();
+  }, requireOrigin, async (req, res) => {
     const { username: supplied, password } = req.body ?? {};
     if (typeof supplied !== 'string' || typeof password !== 'string' || password.length > 512) {
       return res.status(400).json({ error: 'Thông tin đăng nhập không hợp lệ' });

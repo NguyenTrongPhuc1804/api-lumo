@@ -10,6 +10,35 @@ const origin = 'http://127.0.0.1:5178';
 const salt = '0123456789abcdef0123456789abcdef';
 const config = { ADMIN_WEB_ORIGIN: origin, ADMIN_WEB_USERNAME: 'test-admin', ADMIN_WEB_PASSWORD_HASH: `${salt}:${scryptSync('test-only-password', Buffer.from(salt, 'hex'), 64).toString('hex')}` };
 
+for (const NODE_ENV of ['development', 'production']) {
+  test(`ADMIN_WEB_ALLOW_ANY_ORIGIN chỉ có hiệu lực trong development (${NODE_ENV})`, async (t) => {
+    const auth = createAdminWebAuth({ ...config, NODE_ENV, ADMIN_WEB_ORIGIN: 'https://admin.example', ADMIN_WEB_ALLOW_ANY_ORIGIN: 'true' });
+    const app = express();
+    app.use(express.json(), auth.router);
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = (path, headers = {}) => fetch(base + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ username: 'test-admin', password: 'test-only-password' }),
+    });
+
+    assert.equal((await post('/login')).status, 403);
+    assert.equal((await post('/login', { Origin: 'null' })).status, 403);
+    const login = await post('/login', { Origin: 'http://localhost:5173' });
+    if (NODE_ENV === 'production') {
+      assert.equal(login.status, 403);
+      assert.equal((await post('/login', { Origin: 'https://admin.example' })).status, 200);
+      return;
+    }
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    assert.equal((await post('/logout', { Origin: 'https://preview.example' })).status, 401);
+    assert.equal((await post('/logout', { Origin: 'https://preview.example', Cookie: cookie })).status, 200);
+  });
+}
+
 test('phiên web bảo vệ danh sách, lọc DB, chặn CSRF và thu hồi khi đăng xuất', async (t) => {
   const auth = createAdminWebAuth(config);
   const app = express();
