@@ -34,7 +34,7 @@ for (const scenario of [
       assert.equal(res.status, scenario.status);
       if (scenario.status === 200) {
         assert.deepEqual(await res.json(), { ok: true });
-        assert.deepEqual(deleted, [{ _id: "u1" }]);
+        assert.deepEqual(deleted, [{ _id: "u1", provider: { $ne: "web" } }]);
         assert.equal(await User.findById("u1"), null);
         const retry = await fetch(`${server.baseUrl}/api/me`, { method: "DELETE", headers });
         assert.equal(retry.status, 401);

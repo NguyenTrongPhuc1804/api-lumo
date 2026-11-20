@@ -76,7 +76,7 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
 
     try {
       const profile = await exchangeGoogleCode(code);
-      const user = await findOrCreateUser({ provider: "google", ...profile });
+      const user = await findOrCreateUser({ ...profile, provider: "google" });
 
       if (user.status === "blocked") {
         return res.redirect(deepLink({ error: "account_blocked" }));
@@ -105,7 +105,7 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
   // Translation la cache dung chung, khong gan voi user nen khong xoa day chuyen.
   router.delete("/me", requireUser, async (req, res) => {
     try {
-      const result = await User.deleteOne({ _id: req.user._id });
+      const result = await User.deleteOne({ _id: req.user._id, provider: { $ne: "web" } });
       if (result.deletedCount === 0) return res.status(404).json({ error: "Khong tim thay tai khoan" });
       res.json({ ok: true });
     } catch {

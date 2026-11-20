@@ -6,10 +6,185 @@ import { createAdminWebAuth } from '../src/routes/adminWebAuth.js';
 import { createAdminUsersRouter } from '../src/routes/adminUsers.js';
 import { User } from '../src/models/User.js';
 import { DailyQuota } from '../src/models/DailyQuota.js';
+import { createAuthRouter } from '../src/routes/auth.js';
+import { signToken } from '../src/services/tokens.js';
+import { Types } from 'mongoose';
+
+async function serveAccounts(t) {
+  const auth = createAdminWebAuth(config);
+  const app = express();
+  app.use('/api/admin-web', auth.cors);
+  app.use(express.json());
+  app.use('/api/admin-web/auth', auth.router);
+  app.use('/api/admin-web', createAdminUsersRouter({ prefix: '', authorize: auth.requireSession }));
+  app.use('/api', createAdminUsersRouter(), createAuthRouter());
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  return (path, body, token) => fetch(`http://127.0.0.1:${server.address().port}/api${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { Origin: origin, 'Content-Type': 'application/json', ...(token && { Authorization: `Bearer ${token}` }) },
+    body: JSON.stringify(body),
+  });
+}
 
 const userId = '507f1f77bcf86cd799439011';
 const mobileAdminId = '507f1f77bcf86cd799439012';
 const otherWebAdminId = '507f1f77bcf86cd799439013';
+
+test('owner quản lý tài khoản web độc lập và phiên viewer chỉ được đọc', async (t) => {
+  const call = await serveAccounts(t);
+  const web = '/admin-web';
+  const accounts = `${web}/auth/accounts`;
+  const session = `${web}/auth/session`;
+  const login = async (username, password) => {
+    const response = await call(`${web}/auth/login`, { username, password });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const owner = await login('test-admin', 'test-only-password');
+  assert.equal((await call(accounts)).status, 401);
+  const input = { email: ' VIEWER@EXAMPLE.COM ', password: 'temp', role: 'viewer' };
+  for (const invalid of [{ role: 'owner' }, { role: 'Viewer' }, { email: 'a@' }, { email: `${'x'.repeat(254)}@x.com` }, { password: ' ' }]) {
+    assert.equal((await call(accounts, { ...input, ...invalid }, owner.token)).status, 400);
+  }
+
+  process.env.JWT_SECRET = 'test-secret';
+  process.env.QUOTA_HMAC_SECRET = 'test-quota-secret';
+  const googleId = new Types.ObjectId().toString();
+  const users = new Map([[googleId, {
+    _id: googleId, provider: 'google', providerId: 'google-fixture', role: 'admin', status: 'active',
+    email: 'google@example.com', webAdmin: { loginEmail: 'google@example.com', credentialVersion: 'existing' },
+  }], [userId, { _id: userId, provider: 'google', providerId: 'other-google', role: 'user', status: 'active', email: 'viewer@example.com' }]]);
+  t.mock.method(User.collection, 'insertOne', async (user) => {
+    if ([...users.values()].some((row) => row.webAdmin?.loginEmail === user.webAdmin.loginEmail)) {
+      throw Object.assign(new Error('duplicate'), { code: 11000 });
+    }
+    users.set(String(user._id), structuredClone({ ...user, _id: String(user._id) }));
+    return { insertedId: user._id };
+  });
+  t.mock.method(User, 'findOne', async (filter) => structuredClone([...users.values()].find((user) =>
+    user.webAdmin?.loginEmail === filter['webAdmin.loginEmail'] && filter.provider.$in.includes(user.provider))));
+  t.mock.method(User, 'findById', async (id) => structuredClone(users.get(String(id))));
+  function matches(user, filter) {
+    return Object.entries(filter).every(([field, expected]) => {
+      if (field === '$and') return expected.every((part) => matches(user, part));
+      if (field === '$or') return expected.some((part) => matches(user, part));
+      const value = field === 'webAdmin.role' ? user.webAdmin?.role : user[field];
+      if (expected instanceof RegExp) return typeof value === 'string' && expected.test(value);
+      if (typeof expected === 'object' && '$ne' in expected) return value !== expected.$ne;
+      return value === expected;
+    });
+  }
+  const matchingUsers = (filter) => [...users.values()].filter((user) => matches(user, filter));
+  t.mock.method(User, 'find', (filter) => {
+    const items = matchingUsers(filter);
+    return { sort: () => Object.assign(Promise.resolve(items), { skip: (offset) => ({ limit: async (limit) => items.slice(offset, offset + limit) }) }) };
+  });
+  t.mock.method(User, 'countDocuments', async (filter) => matchingUsers(filter).length);
+  t.mock.method(User, 'updateOne', async (filter, { $set }) => {
+    const user = users.get(String(filter._id));
+    if (!user || filter.provider !== user.provider) return { matchedCount: 0 };
+    const version = filter['webAdmin.credentialVersion'];
+    if (version && (version.$exists === false ? user.webAdmin : version !== user.webAdmin?.credentialVersion)) return { matchedCount: 0 };
+    if ($set.webAdmin && [...users.values()].some((row) => row !== user && row.webAdmin?.loginEmail === $set.webAdmin.loginEmail)) {
+      throw Object.assign(new Error('duplicate'), { code: 11000 });
+    }
+    for (const [field, value] of Object.entries($set)) {
+      if (field.startsWith('webAdmin.')) user.webAdmin[field.split('.')[1]] = value;
+      else user[field] = value;
+    }
+    return { matchedCount: 1 };
+  });
+  t.mock.method(User, 'deleteOne', async (filter) => ({ deletedCount: users.get(String(filter._id))?.provider === filter.provider && users.delete(String(filter._id)) ? 1 : 0 }));
+
+  t.mock.method(DailyQuota, 'find', async () => []);
+  const loginEmailIndex = User.schema.indexes().find(([fields]) => fields['webAdmin.loginEmail'] === 1);
+  assert.equal(loginEmailIndex?.[1].unique, true);
+  assert.deepEqual(loginEmailIndex[1].partialFilterExpression, { 'webAdmin.loginEmail': { $type: 'string' } });
+  const responses = await Promise.all([call(accounts, input, owner.token), call(accounts, input, owner.token)]);
+  assert.deepEqual(responses.map((res) => res.status).sort(), [201, 409]);
+  const { id, ...details } = await responses.find((res) => res.status === 201).json();
+  assert.deepEqual(details, { email: 'viewer@example.com', role: 'viewer' });
+  assert.deepEqual(await (await call(accounts, undefined, owner.token)).json(), { items: [{ id, ...details }] });
+  const ownerList = async (query = '') => {
+    const response = await call(`${web}/users${query}`, undefined, owner.token);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const { items: sameEmail, total: sameEmailTotal } = await ownerList('?q=viewer%40example.com');
+  assert.equal(sameEmailTotal, 2);
+  assert.deepEqual(sameEmail.map(({ id, provider }) => [id, provider]), [[userId, 'google'], [id, 'web']]);
+  const webRow = sameEmail[1];
+  assert.equal(webRow.role, 'user');
+  assert.equal(webRow.webAdminRole, 'viewer');
+  for (const field of ['dailyLimit', 'usageCount', 'providerId', 'webAdmin']) assert.equal(Object.hasOwn(webRow, field), false);
+  const usersPage = await ownerList('?q=viewer%40example.com&role=user&limit=1&page=2');
+  assert.equal(usersPage.total, 2);
+  assert.deepEqual(usersPage.items.map((item) => item.id), [id]);
+  assert.deepEqual((await ownerList('?role=admin')).items.map((item) => item.id), [googleId]);
+  const original = users.get(id);
+  assert.equal(original.provider, 'web');
+  assert.match(original.webAdmin.passwordHash, /^[a-f0-9]{32}:[a-f0-9]{128}$/);
+  const pending = await login(details.email, 'temp');
+  assert.deepEqual(await (await call(session, undefined, pending.token)).json(), { username: details.email, role: 'viewer', mustChangePassword: true });
+  assert.equal((await call(`${web}/users`, undefined, pending.token)).status, 403);
+  const changed = await call(`${web}/auth/change-password`, { password: 'new' }, pending.token);
+  assert.equal(changed.status, 200);
+  const viewer = await changed.json();
+  assert.equal(viewer.role, 'viewer');
+  assert.equal((await call(session, undefined, pending.token)).status, 401);
+  for (const [path, token] of [[`${web}/users`, viewer.token], ['/admin/users', signToken(googleId)]]) {
+    const list = await call(path, undefined, token);
+    assert.equal(list.status, 200);
+    const { items, total } = await list.json();
+    assert.equal(total, 2);
+    assert.deepEqual(items.map((item) => item.id).sort(), [googleId, userId].sort());
+  }
+  assert.equal((await call('/me', undefined, signToken(id))).status, 401);
+  assert.equal((await call(`/admin/users/${id}/block`, {}, signToken(googleId))).status, 404);
+  assert.equal((await call(accounts, { ...input, email: ' GOOGLE@EXAMPLE.COM ' }, owner.token)).status, 409);
+  assert.equal((await call(`${web}/auth/users/${userId}/grant`, { password: 'temp' }, owner.token)).status, 409);
+  assert.equal((await call(`${accounts}/${googleId}/revoke`, {}, owner.token)).status, 404);
+  assert.equal((await call(`${accounts}/${googleId}/role`, { role: 'viewer' }, owner.token)).status, 404);
+  assert.equal((await call(`${accounts}/${googleId}/reset-password`, { password: 'temp' }, owner.token)).status, 404);
+  // Quyền phiên lấy từ DB, không lấy từ lúc phát token.
+  original.webAdmin.role = 'admin';
+  assert.equal((await (await call(session, undefined, viewer.token)).json()).role, 'admin');
+  original.webAdmin.role = 'viewer';
+  for (const action of ['block', 'unblock']) assert.equal((await call(`${web}/users/${userId}/${action}`, {}, viewer.token)).status, 403);
+  assert.equal((await call(accounts, undefined, viewer.token)).status, 403);
+  assert.equal((await call(accounts, input, viewer.token)).status, 403);
+  const account = `${accounts}/${id}`;
+  for (const action of ['role', 'reset-password', 'revoke']) assert.equal((await call(`${account}/${action}`, {}, viewer.token)).status, 403);
+  assert.equal((await call(`${web}/users/${id}/block`, {}, owner.token)).status, 404);
+  assert.equal((await call(`${web}/auth/users/${id}/revoke`, {}, owner.token)).status, 404);
+  assert.equal((await call(`${account}/role`, { role: 'owner' }, owner.token)).status, 400);
+  assert.deepEqual(await (await call(`${account}/role`, { role: 'admin' }, owner.token)).json(), { ok: true });
+  assert.equal((await call(session, undefined, viewer.token)).status, 401);
+  const admin = await login(details.email, 'new');
+  assert.equal(admin.role, 'admin');
+  assert.deepEqual((await ownerList('?role=admin')).items.map(({ id, role }) => [id, role]), [[googleId, 'admin'], [id, 'admin']]);
+  assert.equal((await (await call(`${web}/users`, undefined, admin.token)).json()).items.some((item) => item.provider === 'web'), false);
+  assert.equal((await call(accounts, input, admin.token)).status, 403);
+  assert.deepEqual(await (await call(`${account}/reset-password`, { password: 'reset' }, owner.token)).json(), { ok: true });
+  assert.equal((await call(session, undefined, admin.token)).status, 401);
+  const reset = await login(details.email, 'reset');
+  assert.equal(reset.role, 'admin');
+  assert.equal(reset.mustChangePassword, true);
+  const oldVersion = original.webAdmin.credentialVersion;
+  assert.deepEqual(await (await call(`${account}/revoke`, {}, owner.token)).json(), { ok: true });
+  assert.equal(users.has(id), false);
+  const remaining = await ownerList('?q=viewer%40example.com');
+  assert.equal(remaining.total, 1);
+  assert.deepEqual(remaining.items.map(({ id, provider }) => [id, provider]), [[userId, 'google']]);
+  const regrant = await call(accounts, input, owner.token);
+  assert.equal(regrant.status, 201);
+  const { id: newId } = await regrant.json();
+  assert.notEqual(newId, id);
+  assert.notEqual(users.get(newId).webAdmin.credentialVersion, oldVersion);
+  assert.equal((await call(session, undefined, reset.token)).status, 401);
+});
 
 const origin = 'http://127.0.0.1:5178';
 const salt = '0123456789abcdef0123456789abcdef';
@@ -76,7 +251,10 @@ test('Bearer token riêng của web admin bảo vệ danh sách và bị thu h�
   assert.equal(response.status, 200);
   assert.equal((await response.json()).total, 13);
   assert.deepEqual(listFilter, countFilter);
-  assert.equal(listFilter.role, 'user');
+  assert.deepEqual(listFilter.$and, [{ $or: [
+    { provider: { $ne: 'web' }, role: 'user' },
+    { provider: 'web', 'webAdmin.role': 'viewer' },
+  ] }]);
   assert.equal(listFilter.status, 'blocked');
   assert.equal(listFilter.$or[0].name.test('a.b'), true);
   assert.equal(listFilter.$or[0].name.test('axb'), false);
@@ -110,7 +288,9 @@ test('phiên web được cấp quyền, đổi mật khẩu và không sống l
     if (version && (version.$exists === false ? Boolean(user.webAdmin) : user.webAdmin?.credentialVersion !== version)) return { matchedCount: 0 };
     if (filter.status && !filter.status.$in.includes(user.status)) return { matchedCount: 0 };
     if (update.$set?.status) user.status = update.$set.status;
-    if (update.$set?.['webAdmin.credentialVersion']) user.webAdmin.credentialVersion = update.$set['webAdmin.credentialVersion'];
+    for (const [field, value] of Object.entries(update.$set ?? {})) {
+      if (field.startsWith('webAdmin.')) user.webAdmin[field.split('.')[1]] = value;
+    }
     if (update.$set?.webAdmin) user.webAdmin = update.$set.webAdmin;
     if (update.$unset?.webAdmin !== undefined) delete user.webAdmin;
     return { matchedCount: 1 };
@@ -151,6 +331,8 @@ test('phiên web được cấp quyền, đổi mật khẩu và không sống l
   assert.deepEqual(await (await call(`${path}/grant`, { password }, owner.token)).json(), { ok: true });
   assert.match(user.webAdmin.passwordHash, /^[a-f0-9]{32}:[a-f0-9]{128}$/);
   assert.equal(user.role, 'user');
+  // Quyền Google cũ chưa lưu vai trò web vẫn được xem là admin.
+  delete user.webAdmin.role;
   const pending = await login(' USER@EXAMPLE.COM ', password);
   assert.equal(pending.mustChangePassword, true);
   assert.deepEqual(await (await call('/auth/session', undefined, pending.token)).json(), { username: user.email, role: 'admin', mustChangePassword: true });

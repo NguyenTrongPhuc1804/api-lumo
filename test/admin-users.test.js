@@ -90,7 +90,7 @@ test("admin mobile khoá được user khác và vô hiệu hóa phiên web tron
   const target = { ...other, webAdmin: { credentialVersion: "old" } };
   const restore = stubUsers({ "admin-1": admin, "user-2": target });
   t.mock.method(User, "updateOne", async (filter, update) => {
-    assert.deepEqual(filter, { _id: "user-2", "webAdmin.credentialVersion": "old" });
+    assert.deepEqual(filter, { _id: "user-2", provider: { $ne: "web" }, "webAdmin.credentialVersion": "old" });
     target.status = update.$set.status;
     target.webAdmin.credentialVersion = update.$set["webAdmin.credentialVersion"];
     return { matchedCount: 1 };

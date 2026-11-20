@@ -40,7 +40,7 @@ export async function requireUser(req, res, next) {
   } catch {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
-  if (!user) {
+  if (!user || user.provider === "web") {
     return res.status(401).json({ error: "Phiên đăng nhập đã hết hạn", code: "ACCOUNT_NOT_FOUND" });
   }
   if (user.status === "blocked") {

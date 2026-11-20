@@ -12,6 +12,11 @@ const readBearer = (req) => /^Bearer ([a-f0-9]{64})$/i.exec(req.get('authorizati
 const normalizeEmail = (email) => email?.trim().toLowerCase() ?? '';
 const validPassword = (password) => typeof password === 'string' && password.length <= 512 && Boolean(password.trim());
 const activeStatus = { $in: ['active', null] };
+const webProviders = ['google', 'web'];
+const validRole = (role) => role === 'admin' || role === 'viewer';
+const webRole = (user) => user?.webAdmin?.role ?? (user?.provider === 'google' ? 'admin' : undefined);
+const newVersion = () => randomBytes(16).toString('hex');
+const toWebAccount = (user) => ({ id: String(user._id), email: user.webAdmin.loginEmail, role: user.webAdmin.role });
 const passwordError = 'Mật khẩu không được để trống và không quá 512 ký tự';
 const hashPattern = /^([a-f0-9]{32}):([a-f0-9]{128})$/i;
 
@@ -73,10 +78,11 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
       }
       try {
         const user = await User.findById(session.userId);
-        if (user?.provider === 'google' && (user.status === 'active' || user.status == null)
+        const role = webRole(user);
+        if (user && webProviders.includes(user.provider) && validRole(role) && (user.status === 'active' || user.status == null)
           && user.webAdmin?.credentialVersion && user.webAdmin.credentialVersion === session.credentialVersion
           && sessions.get(key) === session && session.expires > now()) {
-          req.adminWeb = { ...session, key, mustChangePassword: user.webAdmin.mustChangePassword };
+          req.adminWeb = { ...session, key, role, mustChangePassword: user.webAdmin.mustChangePassword };
           return next();
         }
       } catch {
@@ -108,12 +114,13 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
     const email = normalizeEmail(supplied);
     if (email !== normalizeEmail(username) && email.includes('@') && email.length <= 254) {
       try {
-        const user = await User.findOne({ 'webAdmin.loginEmail': email, provider: 'google', status: activeStatus }, '+webAdmin.passwordHash');
+        const user = await User.findOne({ 'webAdmin.loginEmail': email, provider: { $in: webProviders }, status: activeStatus }, '+webAdmin.passwordHash');
+        const role = webRole(user);
         // Dùng hash của owner làm dự phòng để không bỏ qua chi phí scrypt khi email không tồn tại.
         const matched = await matchesPassword(password, user?.webAdmin?.passwordHash ?? hash);
-        if (matched && user?.webAdmin?.passwordHash) {
+        if (matched && validRole(role) && user?.webAdmin?.passwordHash && user.webAdmin.credentialVersion) {
           const { credentialVersion, mustChangePassword } = user.webAdmin;
-          return issueSession(res, { username: email, role: 'admin', userId: String(user._id), credentialVersion, mustChangePassword });
+          return issueSession(res, { username: email, role, userId: String(user._id), credentialVersion, mustChangePassword });
         }
       } catch {
         return res.status(503).json({ error: 'Database chưa kết nối' });
@@ -124,7 +131,7 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
     return res.status(401).json({ error: 'Sai tên đăng nhập hoặc mật khẩu' });
   });
   router.post('/change-password', requireToken, async (req, res) => {
-    const { userId, key, credentialVersion, mustChangePassword, username } = req.adminWeb;
+    const { userId, key, credentialVersion, mustChangePassword, username, role } = req.adminWeb;
     if (!mustChangePassword) return res.status(403).json({ error: 'Không có yêu cầu đổi mật khẩu tạm' });
     const { password } = req.body ?? {};
     if (!validPassword(password)) return res.status(400).json({ error: passwordError });
@@ -134,19 +141,80 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
       if (await matchesPassword(password, user.webAdmin.passwordHash)) {
         return res.status(400).json({ error: 'Mật khẩu mới phải khác mật khẩu tạm' });
       }
-      const webAdmin = {
-        loginEmail: username, passwordHash: await hashPassword(password),
-        mustChangePassword: false, credentialVersion: randomBytes(16).toString('hex'),
+      const version = newVersion();
+      const changes = {
+        'webAdmin.passwordHash': await hashPassword(password),
+        'webAdmin.mustChangePassword': false,
+        'webAdmin.credentialVersion': version,
       };
       if (!(sessions.get(key)?.expires > now())) return res.status(401).json({ error: 'Phiên đã hết hiệu lực' });
-      const result = await User.updateOne({ _id: userId, status: activeStatus, 'webAdmin.credentialVersion': credentialVersion }, { $set: { webAdmin } });
+      const result = await User.updateOne({ _id: userId, provider: user.provider, status: activeStatus, 'webAdmin.credentialVersion': credentialVersion }, { $set: changes });
       if (!result.matchedCount) return res.status(401).json({ error: 'Phiên đã hết hiệu lực' });
       sessions.delete(key);
-      return issueSession(res, { username, role: 'admin', userId, credentialVersion: webAdmin.credentialVersion });
+      return issueSession(res, { username, role, userId, credentialVersion: version });
     } catch {
       return res.status(503).json({ error: 'Database chưa kết nối' });
     }
   });
+
+  router.get('/accounts', requireOwner, async (req, res) => {
+    try {
+      const users = await User.find({ provider: 'web' }).sort({ 'webAdmin.loginEmail': 1 });
+      return res.json({ items: users.map(toWebAccount) });
+    } catch {
+      return res.status(503).json({ error: 'Database chưa kết nối' });
+    }
+  });
+
+  router.post('/accounts', requireOwner, async (req, res) => {
+    const { email: supplied, password, role } = req.body ?? {};
+    const email = typeof supplied === 'string' ? normalizeEmail(supplied) : '';
+    if (email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return res.status(400).json({ error: 'Email không hợp lệ' });
+    }
+    if (!validRole(role)) return res.status(400).json({ error: 'Vai trò không hợp lệ' });
+    if (!validPassword(password)) return res.status(400).json({ error: passwordError });
+    if (email === normalizeEmail(username)) return res.status(409).json({ error: 'Email trùng tên chủ quản trị' });
+    try {
+      const user = await User.create({ provider: 'web', providerId: newVersion(), email, webAdmin: {
+        loginEmail: email, passwordHash: await hashPassword(password), mustChangePassword: true,
+        credentialVersion: newVersion(), role,
+      } });
+      return res.status(201).json(toWebAccount(user));
+    } catch (error) {
+      if (error.code === 11000) return res.status(409).json({ error: 'Email đã được cấp quyền web admin' });
+      return res.status(503).json({ error: 'Database chưa kết nối' });
+    }
+  });
+
+  for (const action of ['role', 'reset-password', 'revoke']) {
+    router.post(`/accounts/:id/${action}`, requireOwner, async (req, res) => {
+      const { id } = req.params;
+      const { password, role } = req.body ?? {};
+      if (!isValidObjectId(id)) return res.status(400).json({ error: 'ID tài khoản không hợp lệ' });
+      if (action === 'role' && !validRole(role)) return res.status(400).json({ error: 'Vai trò không hợp lệ' });
+      if (action === 'reset-password' && !validPassword(password)) return res.status(400).json({ error: passwordError });
+      try {
+        const filter = { _id: id, provider: 'web' };
+        let found;
+        if (action === 'revoke') {
+          found = (await User.deleteOne(filter)).deletedCount;
+        } else {
+          const changes = { 'webAdmin.credentialVersion': newVersion() };
+          if (action === 'role') changes['webAdmin.role'] = role;
+          else {
+            changes['webAdmin.passwordHash'] = await hashPassword(password);
+            changes['webAdmin.mustChangePassword'] = true;
+          }
+          found = (await User.updateOne(filter, { $set: changes })).matchedCount;
+        }
+        if (!found) return res.status(404).json({ error: 'Không tìm thấy tài khoản' });
+        return res.json({ ok: true });
+      } catch {
+        return res.status(503).json({ error: 'Database chưa kết nối' });
+      }
+    });
+  }
 
   for (const action of ['grant', 'reset-password', 'revoke']) {
     router.post(`/users/:id/${action}`, requireOwner, async (req, res) => {
@@ -156,11 +224,11 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
       if (action !== 'revoke' && !validPassword(password)) return res.status(400).json({ error: passwordError });
       try {
         const user = await User.findById(id);
-        if (!user) return res.status(404).json({ error: 'Không tìm thấy tài khoản' });
+        if (!user || user.provider === 'web') return res.status(404).json({ error: 'Không tìm thấy tài khoản' });
         if (action === 'grant' ? user.webAdmin : !user.webAdmin) {
           return res.status(409).json({ error: 'Trạng thái quyền web admin không phù hợp' });
         }
-        const filter = { _id: id, 'webAdmin.credentialVersion': user.webAdmin?.credentialVersion ?? { $exists: false } };
+        const filter = { _id: id, provider: { $ne: 'web' }, 'webAdmin.credentialVersion': user.webAdmin?.credentialVersion ?? { $exists: false } };
         // Thu hồi xóa luôn version; lần cấp mới sinh một version khác.
         let update = { $unset: { webAdmin: 1 } };
         if (action !== 'revoke') {
@@ -174,7 +242,7 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
           if (action === 'grant') filter.email = user.email;
           update = { $set: { webAdmin: {
             loginEmail, passwordHash: await hashPassword(password), mustChangePassword: true,
-            credentialVersion: randomBytes(16).toString('hex'),
+            credentialVersion: newVersion(), role: webRole(user),
           } } };
         }
         const result = await User.updateOne(filter, update);

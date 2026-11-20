@@ -35,8 +35,15 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
       return res.status(400).json({ error: "Bộ lọc tài khoản không hợp lệ" });
     }
     const search = q.trim();
-    const filter = {};
-    if (role) filter.role = role;
+    const isOwner = req.adminWeb?.role === "owner";
+    const mobileOnly = { provider: { $ne: "web" } };
+    const filter = isOwner ? {} : { ...mobileOnly };
+    if (role && isOwner) {
+      filter.$and = [{ $or: [
+        { ...mobileOnly, role },
+        { provider: "web", "webAdmin.role": role === "user" ? "viewer" : "admin" },
+      ] }];
+    } else if (role) filter.role = role;
     if (status) filter.status = status === "active" ? { $in: ["active", null] } : status;
     if (search) {
       const literal = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -49,15 +56,26 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
         User.countDocuments(filter),
       ]);
       const { usageDate } = quotaPeriod();
-      const keys = items.map(quotaIdentity);
-      const rows = keys.length ? await DailyQuota.find({ identityKey: { $in: keys }, usageDate }) : [];
+      const keys = items.map((user) => user.provider === "web" ? null : quotaIdentity(user));
+      const quotaKeys = keys.filter(Boolean);
+      const rows = quotaKeys.length ? await DailyQuota.find({ identityKey: { $in: quotaKeys }, usageDate }) : [];
       const counts = new Map(rows.map((row) => [row.identityKey, row.usageCount]));
       res.json({
-        items: items.map((user, index) => ({
-          ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }),
-          ...(req.adminWeb && { webAdminGranted: Boolean(user.webAdmin) }),
-          ...(req.adminWeb?.role === "owner" && user.webAdmin && { webAdminLoginEmail: user.webAdmin.loginEmail }),
-        })),
+        items: items.map((user, index) => {
+          if (user.provider === "web") {
+            const webAdminRole = user.webAdmin?.role;
+            return {
+              id: String(user._id), email: user.email, provider: "web",
+              role: webAdminRole === "admin" ? "admin" : "user", webAdminRole,
+              status: user.status ?? "active", createdAt: user.createdAt ?? null, lastLoginAt: null,
+            };
+          }
+          return {
+            ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }),
+            ...(req.adminWeb && { webAdminGranted: Boolean(user.webAdmin) }),
+            ...(isOwner && user.webAdmin && { webAdminLoginEmail: user.webAdmin.loginEmail }),
+          };
+        }),
         total, page, limit,
       });
     } catch {
@@ -68,6 +86,7 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
   // Khoa / mo khoa tai khoan. Khong cho admin tu khoa chinh minh
   // de khong tu loai minh khoi he thong.
   const setStatus = (status) => async (req, res) => {
+    if (req.adminWeb?.role === "viewer") return res.status(403).json({ error: "Tài khoản chỉ có quyền xem" });
     const { id } = req.params;
     const actorId = req.adminWeb?.userId ?? req.user?._id ?? req.user?.id;
     if (actorId && String(actorId) === id) {
@@ -76,11 +95,11 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
 
     try {
       const user = await User.findById(id);
-      if (!user) return res.status(404).json({ error: "Khong tim thay tai khoan" });
+      if (!user || user.provider === "web") return res.status(404).json({ error: "Khong tim thay tai khoan" });
       if (actorId && String(actorId) === String(user._id)) {
         return res.status(400).json({ error: "Không thể tự khoá tài khoản của mình" });
       }
-      const filter = { _id: id };
+      const filter = { _id: id, provider: { $ne: "web" } };
       if (req.adminWeb?.role === "admin") {
         if (user.role === "admin" || user.webAdmin) {
           return res.status(403).json({ error: "Không thể thay đổi trạng thái của quản trị viên khác" });
