@@ -53,7 +53,9 @@ test("người thường gọi API admin users bị 403", async () => {
 
 test("admin xem được số lượt từ bộ đếm mới mà không thấy định danh", async (t) => {
   process.env.JWT_SECRET = "test-secret";
-  const profile = { ...other, provider: "google", providerId: "secret-provider-id", usageCount: 88 };
+  const profile = { ...other, provider: "google", providerId: "secret-provider-id", usageCount: 88,
+    webAdmin: { loginEmail: "fixture@example.com", credentialVersion: "fixture-version" },
+  };
   const identityKey = quotaIdentity(profile);
   t.mock.method(DailyQuota, "find", async (filter) => {
     assert.deepEqual(filter, { identityKey: { $in: [identityKey] }, usageDate: quotaPeriod().usageDate });
@@ -75,30 +77,31 @@ test("admin xem được số lượt từ bộ đếm mới mà không thấy �
     assert.equal(body.items[0].usageCount, 3);
     assert.equal("providerId" in body.items[0], false);
     assert.equal("identityKey" in body.items[0], false);
+    assert.equal("webAdminGranted" in body.items[0], false);
+    assert.equal("webAdminLoginEmail" in body.items[0], false);
   } finally {
     restore();
     await server.close();
   }
 });
 
-test("admin khoá được user khác", async () => {
+test("admin mobile khoá được user khác và vô hiệu hóa phiên web trong cùng thao tác", async (t) => {
   process.env.JWT_SECRET = "test-secret";
-  let savedStatus = "";
-  const restore = stubUsers({ "admin-1": admin }, {
-    findById: undefined,
+  const target = { ...other, webAdmin: { credentialVersion: "old" } };
+  const restore = stubUsers({ "admin-1": admin, "user-2": target });
+  t.mock.method(User, "updateOne", async (filter, update) => {
+    assert.deepEqual(filter, { _id: "user-2", "webAdmin.credentialVersion": "old" });
+    target.status = update.$set.status;
+    target.webAdmin.credentialVersion = update.$set["webAdmin.credentialVersion"];
+    return { matchedCount: 1 };
   });
-  // findById dung chung cho ca requireUser lan route, nen phai tra theo id.
-  User.findById = async (id) => {
-    if (String(id) === "user-2") {
-      return { ...other, set status(v) { savedStatus = v; }, get status() { return savedStatus || "active"; }, save: async () => {} };
-    }
-    return admin;
-  };
   const server = await serve(createAdminUsersRouter());
   try {
     const res = await fetch(`${server.baseUrl}/api/admin/users/user-2/block`, { method: "POST", headers: { Authorization: `Bearer ${signToken("admin-1")}` } });
     assert.equal(res.status, 200);
-    assert.equal(savedStatus, "blocked");
+    assert.equal(target.status, "blocked");
+    assert.match(target.webAdmin.credentialVersion, /^[a-f0-9]{32}$/);
+    assert.notEqual(target.webAdmin.credentialVersion, "old");
   } finally {
     restore();
     await server.close();

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import mongoose from "mongoose";
+import { User } from "./models/User.js";
 import { DailyQuota } from "./models/DailyQuota.js";
 import translateRouter from "./routes/translate.js";
 import modelsRouter from "./routes/models.js";
@@ -58,12 +59,12 @@ app.use("/api/admin-web", createAdminUsersRouter({ prefix: "", authorize: adminW
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 
-// Chi nhan request khi unique index va TTL cua bo dem da san sang.
+// Chi nhan request khi index han muc va tai khoan da san sang.
 try {
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-  await DailyQuota.createIndexes();
+  await Promise.all([DailyQuota.createIndexes(), User.createIndexes()]);
 } catch (err) {
-  console.error("Khong the khoi tao MongoDB va index han muc:", err.name, err.code ?? "");
+  console.error("Khong the khoi tao MongoDB va index:", err.name, err.code ?? "");
   process.exit(1);
 }
 

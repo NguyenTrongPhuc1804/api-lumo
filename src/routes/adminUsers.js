@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { User } from "../models/User.js";
 import { requireAdminUser } from "../middleware/auth.js";
@@ -52,7 +53,11 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
       const rows = keys.length ? await DailyQuota.find({ identityKey: { $in: keys }, usageDate }) : [];
       const counts = new Map(rows.map((row) => [row.identityKey, row.usageCount]));
       res.json({
-        items: items.map((user, index) => toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 })),
+        items: items.map((user, index) => ({
+          ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }),
+          ...(req.adminWeb && { webAdminGranted: Boolean(user.webAdmin) }),
+          ...(req.adminWeb?.role === "owner" && user.webAdmin && { webAdminLoginEmail: user.webAdmin.loginEmail }),
+        })),
         total, page, limit,
       });
     } catch {
@@ -64,15 +69,33 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
   // de khong tu loai minh khoi he thong.
   const setStatus = (status) => async (req, res) => {
     const { id } = req.params;
-    if (req.user && String(req.user._id ?? req.user.id) === String(id)) {
+    const actorId = req.adminWeb?.userId ?? req.user?._id ?? req.user?.id;
+    if (actorId && String(actorId) === id) {
       return res.status(400).json({ error: "Không thể tự khoá tài khoản của mình" });
     }
 
     try {
       const user = await User.findById(id);
       if (!user) return res.status(404).json({ error: "Khong tim thay tai khoan" });
-      user.status = status;
-      await user.save();
+      if (actorId && String(actorId) === String(user._id)) {
+        return res.status(400).json({ error: "Không thể tự khoá tài khoản của mình" });
+      }
+      const filter = { _id: id };
+      if (req.adminWeb?.role === "admin") {
+        if (user.role === "admin" || user.webAdmin) {
+          return res.status(403).json({ error: "Không thể thay đổi trạng thái của quản trị viên khác" });
+        }
+        filter.role = { $ne: "admin" };
+        filter.webAdmin = { $exists: false };
+      }
+      const changes = { status };
+      if (status === "blocked") {
+        // Chặn thao tác đồng thời với cấp/thu hồi quyền hoặc đổi mật khẩu.
+        filter["webAdmin.credentialVersion"] = user.webAdmin?.credentialVersion ?? { $exists: false };
+        if (user.webAdmin) changes["webAdmin.credentialVersion"] = randomBytes(16).toString("hex");
+      }
+      const result = await User.updateOne(filter, { $set: changes });
+      if (!result.matchedCount) return res.status(409).json({ error: "Tài khoản đã thay đổi, vui lòng tải lại" });
       res.json({ ok: true });
     } catch {
       res.status(503).json({ error: "Database chua ket noi" });
