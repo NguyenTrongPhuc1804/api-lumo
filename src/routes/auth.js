@@ -4,7 +4,8 @@ import { User } from "../models/User.js";
 import { findOrCreateUser, signToken } from "../services/tokens.js";
 import { exchangeGoogleCode as realExchangeGoogleCode } from "../services/google.js";
 import { requireUser } from "../middleware/auth.js";
-import { limitFor, todayKey } from "../services/quota.js";
+import { limitFor } from "../services/quota.js";
+import { readDailyUsage } from "../services/dailyQuota.js";
 
 // Ten tham so trong duong dan, tranh go nham o nhieu cho
 const STATE_TTL = "10m";
@@ -12,9 +13,7 @@ const STATE_TTL = "10m";
 // Hop le hoa mot user thanh JSON tra cho app. Khong bao gio tra providerId.
 // Han muc phai dung limitFor() vi dailyLimit = 0 nghia la "lay tu .env",
 // neu tra thang 0 thi app hieu nham la khong gioi han.
-export function toClientUser(user) {
-  // Bo dem chi co nghia trong ngay cua no; sang ngay moi thi coi nhu 0.
-  const usedToday = user.usageDate === todayKey() ? user.usageCount ?? 0 : 0;
+export function toClientUser(user, { usageCount, usageDate }) {
   return {
     id: String(user._id ?? user.id ?? ""),
     email: user.email ?? "",
@@ -24,8 +23,8 @@ export function toClientUser(user) {
     plan: user.plan ?? "free",
     isAdmin: user.role === "admin",
     dailyLimit: limitFor(user),
-    usageCount: usedToday,
-    usageDate: user.usageDate ?? "",
+    usageCount,
+    usageDate,
   };
 }
 
@@ -94,7 +93,14 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
   router.get("/auth/facebook/start", (req, res) => res.status(501).json({ error: "Chưa bật đăng nhập Facebook" }));
   router.get("/auth/facebook/callback", (req, res) => res.status(501).json({ error: "Chưa bật đăng nhập Facebook" }));
 
-  router.get("/me", requireUser, (req, res) => res.json(toClientUser(req.user)));
+  router.get("/me", requireUser, async (req, res) => {
+    try {
+      const usage = await readDailyUsage(req.user);
+      res.json(toClientUser(req.user, usage));
+    } catch {
+      res.status(503).json({ error: "Không tải được hạn mức dịch" });
+    }
+  });
 
   // Translation la cache dung chung, khong gan voi user nen khong xoa day chuyen.
   router.delete("/me", requireUser, async (req, res) => {

@@ -5,6 +5,10 @@ import mongoose from "mongoose";
 import { AiModel } from "../src/models/AiModel.js";
 import { Translation } from "../src/models/Translation.js";
 import { User } from "../src/models/User.js";
+import { DailyQuota } from "../src/models/DailyQuota.js";
+import { quotaIdentity, quotaPeriod } from "../src/services/dailyQuota.js";
+import { createAuthRouter } from "../src/routes/auth.js";
+import { startTestServer } from "./helpers/test-app.js";
 import { signToken } from "../src/services/tokens.js";
 
 // todayKey phai duoc stub de test "sang ngay moi" khong phu thuoc dong ho that.
@@ -13,7 +17,11 @@ process.env.FREE_DAILY_LIMIT = "1";
 
 const { default: router } = await import("../src/routes/translate.js");
 
+process.env.QUOTA_HMAC_SECRET = "test-quota-secret";
+
 const freeUser = () => ({
+  provider: "google",
+  providerId: "g-free",
   _id: "user-free",
   role: "user",
   status: "active",
@@ -26,8 +34,7 @@ const freeUser = () => ({
 function stubWorld(state) {
   const previous = {
     findById: User.findById,
-    findOneAndUpdate: User.findOneAndUpdate,
-    updateOne: User.updateOne,
+    quota: { findOne: DailyQuota.findOne, findOneAndUpdate: DailyQuota.findOneAndUpdate, updateOne: DailyQuota.updateOne },
     modelFindOne: AiModel.findOne,
     translationFind: Translation.find,
     bulkWrite: Translation.bulkWrite,
@@ -46,32 +53,17 @@ function stubWorld(state) {
 
   mongoose.connection.readyState = 1;
 
-  // Mini Mongo trong bo nho: chi ho tro dung hai kieu filter ma quota.js dung,
-  // de test kiem tra that su co tang bo dem chu khong phai gia lap ket qua.
-  User.findOneAndUpdate = async (filter, update) => {
-    const user = state.user;
-    if (filter.usageDate === "today-placeholder") return null;
-    const matchToday = typeof filter.usageDate === "string" && user.usageDate === filter.usageDate
-      && user.usageCount < filter.usageCount.$lt;
-    const matchNewDay = filter.usageDate && filter.usageDate.$ne !== undefined && user.usageDate !== filter.usageDate.$ne;
-
-    if (matchToday) {
-      user.usageCount += update.$inc.usageCount;
-      return user;
-    }
-    if (matchNewDay) {
-      user.usageDate = update.$set.usageDate;
-      user.usageCount = update.$set.usageCount;
-      return user;
-    }
-    return null;
+  DailyQuota.findOne = async () => state.quota;
+  DailyQuota.updateOne = async (filter, update) => {
+    if (state.quotaFails) throw new Error("quota database down");
+    if (update.$setOnInsert) state.quota ??= { ...update.$setOnInsert };
+    if (update.$inc && state.quota) state.quota.usageCount += update.$inc.usageCount;
   };
-  User.updateOne = async (filter, update) => {
-    if (filter._id === state.user._id) state.user.usageCount += update.$inc.usageCount;
-    return { acknowledged: true };
+  DailyQuota.findOneAndUpdate = async (filter, update) => {
+    if (!state.quota || state.quota.usageCount > filter.usageCount.$lte) return null;
+    state.quota.usageCount += update.$inc.usageCount;
+    return state.quota;
   };
-
-  const previousBulkWrite = Translation.bulkWrite;
 
   globalThis.fetch = async (url, options) => {
     if (String(url).startsWith("https://model.test")) {
@@ -85,11 +77,10 @@ function stubWorld(state) {
 
   return () => {
     User.findById = previous.findById;
-    User.findOneAndUpdate = previous.findOneAndUpdate;
-    User.updateOne = previous.updateOne;
+    Object.assign(DailyQuota, previous.quota);
     AiModel.findOne = previous.modelFindOne;
     Translation.find = previous.translationFind;
-    Translation.bulkWrite = previousBulkWrite;
+    Translation.bulkWrite = previous.bulkWrite;
     mongoose.connection.readyState = previous.readyState;
     globalThis.fetch = previous.fetch;
   };
@@ -117,11 +108,12 @@ async function callTranslate({ body, state }) {
 }
 
 test("trúng cache không trừ lượt", async () => {
-  const state = { user: freeUser(), cached: { text: "Hello", translated: "Xin chào" }, modelCalls: 0 };
+  const state = { user: freeUser(), quota: { usageCount: 1 }, cached: { text: "Hello", translated: "Xin chào" }, modelCalls: 0 };
   const res = await callTranslate({ body: { texts: ["Hello"] }, state });
   assert.equal(res.status, 200);
   assert.equal(state.modelCalls, 0);
-  assert.equal(res.body.remaining, 1);
+  assert.equal(res.body.remaining, 0);
+  assert.equal(state.quota.usageCount, 1);
 });
 
 test("gọi model thật thì trừ đúng một lượt", async () => {
@@ -133,8 +125,7 @@ test("gọi model thật thì trừ đúng một lượt", async () => {
 });
 
 test("hết lượt trả 429 và không gọi model", async () => {
-  const user = { ...freeUser(), usageDate: new Date().toISOString().slice(0, 10), usageCount: 1 };
-  const state = { user, cached: null, modelCalls: 0 };
+  const state = { user: freeUser(), quota: { usageCount: 1 }, cached: null, modelCalls: 0 };
   const res = await callTranslate({ body: { texts: ["New sentence"] }, state });
   assert.equal(res.status, 429);
   assert.equal(state.modelCalls, 0);
@@ -155,11 +146,74 @@ test("tài khoản bị khoá trả 403", async () => {
   assert.equal(state.modelCalls, 0);
 });
 
+test("kho hạn mức lỗi thì không gọi model", async () => {
+  const state = { user: freeUser(), modelCalls: 0, quotaFails: true };
+  const res = await callTranslate({ body: { texts: ["Hello"], mode: "manga" }, state });
+  assert.equal(res.status, 502);
+  assert.equal(state.modelCalls, 0);
+});
+
 test("model lỗi thì không mất lượt", async () => {
   const state = { user: freeUser(), cached: null, modelCalls: 0, modelFails: true };
   const res = await callTranslate({ body: { texts: ["New sentence"] }, state });
   assert.equal(res.status, 502);
-  assert.equal(state.user.usageCount, 0);
+  assert.equal(state.quota.usageCount, 0);
+});
+
+test("xoá và đăng nhập lại bằng cùng Google không làm mới lượt trong ngày", async () => {
+  const old = freeUser();
+  let profile = old;
+  const rows = new Map();
+  const keyOf = ({ identityKey, usageDate }) => `${identityKey}:${usageDate}`;
+  const previousUser = { findById: User.findById, deleteOne: User.deleteOne, findOneAndUpdate: User.findOneAndUpdate };
+  const previousQuota = { findOne: DailyQuota.findOne, findOneAndUpdate: DailyQuota.findOneAndUpdate, updateOne: DailyQuota.updateOne };
+  User.findById = async (id) => profile?._id === id ? profile : null;
+  User.deleteOne = async () => { profile = null; return { deletedCount: 1 }; };
+  User.findOneAndUpdate = async (filter, update) => {
+    profile = { ...filter, ...update.$set, ...update.$setOnInsert, _id: "new-profile", role: "user" };
+    return profile;
+  };
+  DailyQuota.findOne = async (key) => rows.get(keyOf(key));
+  DailyQuota.updateOne = async (key, update) => {
+    if (!rows.has(keyOf(key))) rows.set(keyOf(key), { ...update.$setOnInsert });
+  };
+  DailyQuota.findOneAndUpdate = async (filter, update) => {
+    const row = rows.get(keyOf(filter));
+    if (!row || row.usageCount > filter.usageCount.$lte) return null;
+    row.usageCount += update.$inc.usageCount;
+    return row;
+  };
+  const identityKey = quotaIdentity(old);
+  const { usageDate, expiresAt } = quotaPeriod();
+  rows.set(keyOf({ identityKey, usageDate }), { usageCount: 1, expiresAt });
+
+  const app = express.Router();
+  app.use(createAuthRouter({ exchangeGoogleCode: async () => ({ providerId: old.providerId, email: "test@example.test" }) }));
+  app.use(router);
+  const server = await startTestServer(app);
+  try {
+    const deleted = await fetch(`${server.baseUrl}/api/me`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${signToken(old._id)}` },
+    });
+    assert.equal(deleted.status, 200);
+    const start = await fetch(`${server.baseUrl}/api/auth/google/start`, { redirect: "manual" });
+    const state = new URL(start.headers.get("location")).searchParams.get("state");
+    const callback = await fetch(`${server.baseUrl}/api/auth/google/callback?code=test&state=${state}`, { redirect: "manual" });
+    const token = new URL(callback.headers.get("location")).searchParams.get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const me = await (await fetch(`${server.baseUrl}/api/me`, { headers })).json();
+    assert.equal(me.id, "new-profile");
+    assert.equal(me.usageCount, 1);
+    const result = await fetch(`${server.baseUrl}/api/translate`, {
+      method: "POST", headers, body: JSON.stringify({ texts: ["Hello"], targetLang: "vi", mode: "manga" }),
+    });
+    assert.equal(result.status, 429);
+  } finally {
+    Object.assign(User, previousUser);
+    Object.assign(DailyQuota, previousQuota);
+    await server.close();
+  }
 });
 
 test("x-app-key không còn dùng được cho dịch", async () => {

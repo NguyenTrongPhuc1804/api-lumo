@@ -13,8 +13,9 @@ const userSchema = new mongoose.Schema({
   plan: { type: String, default: "free" }, // de san cho goi tra phi sau nay
   // 0 nghia la dung FREE_DAILY_LIMIT trong .env
   dailyLimit: { type: Number, default: 0, min: 0 },
-  usageDate: { type: String, default: "" }, // YYYY-MM-DD theo gio server
-  usageCount: { type: Number, default: 0, min: 0 },
+  // Bo dem cu: chi giu schema de doc du lieu khi chuyen sang DailyQuota.
+  usageDate: String,
+  usageCount: { type: Number, min: 0 },
   createdAt: { type: Date, default: Date.now },
   lastLoginAt: { type: Date, default: Date.now },
 });

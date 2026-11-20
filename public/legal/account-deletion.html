@@ -17,8 +17,9 @@
 <p>Gửi yêu cầu đến <a href="mailto:phucnguyentrong1804@gmail.com">phucnguyentrong1804@gmail.com</a> từ email đã dùng đăng nhập, ghi tiêu đề “Yêu cầu xoá tài khoản Lumo Lens”. Bạn không cần đăng nhập hoặc cài đặt ứng dụng để gửi yêu cầu.</p>
 <p>Yêu cầu được xử lý trong vòng <strong>3 ngày kể từ khi nhận được yêu cầu</strong>, sau khi xác minh đúng chủ tài khoản. Chỉ cung cấp thông tin đủ để xác minh quyền sở hữu; không gửi mật khẩu Google hoặc token đăng nhập.</p>
 <h2>Dữ liệu bị xoá</h2>
-<p>Document tài khoản trên server, gồm mã định danh đăng nhập, email, tên, ảnh đại diện, vai trò, trạng thái, gói và bộ đếm lượt dịch. Token cũ không còn truy cập được vì tài khoản đã mất.</p>
+<p>Hồ sơ tài khoản trên server, gồm mã định danh đăng nhập gốc, email, tên, ảnh đại diện, vai trò, trạng thái và gói. Token cũ không còn truy cập được vì tài khoản đã mất.</p>
 <h2>Dữ liệu còn lại</h2>
+<p>Dù bạn xoá trong app hay yêu cầu qua email, server vẫn giữ tạm bộ đếm chống lạm dụng: mã định danh giả danh, số lượt đã dùng, ngày và thời điểm hết hạn. Bản ghi không chứa email, tên hay mã Google gốc. Nếu tạo tài khoản bằng cùng Google, số lượt đã dùng vẫn được tính đến 00:00 giờ Việt Nam của ngày tiếp theo. MongoDB tự dọn bản ghi sau mốc hết hạn.</p>
 <p>Cache bản dịch dùng chung theo nội dung không gắn với tài khoản nên không bị xoá cùng tài khoản. Cache có TTL 30 ngày; việc dọn có thể chậm hơn mốc hết hạn. Cấu hình, lịch sử hoặc dữ liệu cục bộ khác trên thiết bị không được xoá bởi thao tác xoá tài khoản; bạn có thể xoá dữ liệu ứng dụng hoặc gỡ ứng dụng bằng cài đặt hệ thống.</p>
 <p>Tài khoản Google của bạn không bị xoá. Nếu đăng nhập lại, app tạo tài khoản mới. Email còn trong danh sách quản trị sẽ tiếp tục được cấp quyền quản trị cho tài khoản mới.</p>
 <nav aria-label="Trang pháp lý"><a href="privacy.html">Quyền riêng tư</a> · <a href="terms.html">Điều khoản sử dụng</a></nav>

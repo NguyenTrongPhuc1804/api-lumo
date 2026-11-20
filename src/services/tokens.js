@@ -31,7 +31,7 @@ export async function findOrCreateUser({ provider, providerId, email, name, avat
     { provider, providerId },
     {
       $set: { email: email ?? "", name: name ?? "", avatar: avatar ?? "", lastLoginAt: new Date() },
-      $setOnInsert: { status: "active", plan: "free", usageDate: "", usageCount: 0, dailyLimit: 0 },
+      $setOnInsert: { status: "active", plan: "free", dailyLimit: 0 },
     },
     { new: true, upsert: true }
   );

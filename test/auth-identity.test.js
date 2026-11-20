@@ -89,6 +89,6 @@ test("schema có index duy nhất theo provider + providerId và enum đúng", (
   assert.equal(doc.role, "user");
   assert.equal(doc.status, "active");
   assert.equal(doc.plan, "free");
-  assert.equal(doc.usageCount, 0);
-  assert.equal(doc.usageDate, "");
+  assert.equal(doc.usageCount, undefined); // Bộ đếm mới không nằm trên hồ sơ.
+  assert.equal(doc.usageDate, undefined);
 });

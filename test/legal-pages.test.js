@@ -21,6 +21,8 @@ for (const file of ["privacy.html", "terms.html", "account-deletion.html"]) {
         assert.match(html, /3 ngày kể từ khi nhận được yêu cầu/i);
       }
       assert.match(html, /chưa qua tư vấn pháp lý/i);
+      assert.match(html, /00:00 giờ Việt Nam/);
+      assert.doesNotMatch(html, /gói và bộ đếm lượt dịch/);
       assert.doesNotMatch(html, /<script|(?:src|href)=["']https?:/i);
     } finally {
       await server.close();

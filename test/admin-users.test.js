@@ -4,6 +4,10 @@ import { createAdminUsersRouter } from "../src/routes/adminUsers.js";
 import { signToken } from "../src/services/tokens.js";
 import { User } from "../src/models/User.js";
 import express from "express";
+import { DailyQuota } from "../src/models/DailyQuota.js";
+import { quotaIdentity, quotaPeriod } from "../src/services/dailyQuota.js";
+
+process.env.QUOTA_HMAC_SECRET = "test-quota-secret";
 
 // Thay User.findById de requireUser tra dung tai khoan theo token.
 // Cac ham khac cua User duoc stub theo tung test.
@@ -47,11 +51,17 @@ test("người thường gọi API admin users bị 403", async () => {
   }
 });
 
-test("admin xem được danh sách và không thấy providerId", async () => {
+test("admin xem được số lượt từ bộ đếm mới mà không thấy định danh", async (t) => {
   process.env.JWT_SECRET = "test-secret";
+  const profile = { ...other, provider: "google", providerId: "secret-provider-id", usageCount: 88 };
+  const identityKey = quotaIdentity(profile);
+  t.mock.method(DailyQuota, "find", async (filter) => {
+    assert.deepEqual(filter, { identityKey: { $in: [identityKey] }, usageDate: quotaPeriod().usageDate });
+    return [{ identityKey, usageCount: 3 }];
+  });
   const restore = stubUsers({ "admin-1": admin }, {
     find: () => ({
-      sort: () => ({ skip: () => ({ limit: async () => [{ ...other, providerId: "secret-provider-id" }] }) }),
+      sort: () => ({ skip: () => ({ limit: async () => [profile] }) }),
     }),
     countDocuments: async () => 1,
   });
@@ -62,7 +72,9 @@ test("admin xem được danh sách và không thấy providerId", async () => {
     const body = await res.json();
     assert.equal(body.total, 1);
     assert.equal(body.items[0].name, "Other");
+    assert.equal(body.items[0].usageCount, 3);
     assert.equal("providerId" in body.items[0], false);
+    assert.equal("identityKey" in body.items[0], false);
   } finally {
     restore();
     await server.close();

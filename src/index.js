@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import mongoose from "mongoose";
-import { requireAppKey } from "./middleware/auth.js";
+import { DailyQuota } from "./models/DailyQuota.js";
 import translateRouter from "./routes/translate.js";
 import modelsRouter from "./routes/models.js";
 import { createAuthRouter } from "./routes/auth.js";
@@ -16,6 +16,11 @@ const app = express();
 // Bao loi ro rang ngay luc khoi dong con hon de nguoi dung gap loi bi an.
 if (!process.env.JWT_SECRET) {
   console.error("Thieu JWT_SECRET trong .env. Sinh bang: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");
+  process.exit(1);
+}
+
+if (!process.env.QUOTA_HMAC_SECRET?.trim()) {
+  console.error("Thieu QUOTA_HMAC_SECRET trong moi truong server");
   process.exit(1);
 }
 
@@ -48,13 +53,16 @@ app.use("/api", createAdminUsersRouter());
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 
+// Chi nhan request khi unique index va TTL cua bo dem da san sang.
+try {
+  await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+  await DailyQuota.createIndexes();
+} catch (err) {
+  console.error("Khong the khoi tao MongoDB va index han muc:", err.name, err.code ?? "");
+  process.exit(1);
+}
+
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, "0.0.0.0", () => {
   console.log(`Server chay tai cong ${port}`);
 });
-
-// Ket noi Mongo khong chan server: neu Mongo chua bat thi van dich duoc, chi la khong cache
-mongoose
-  .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
-  .then(() => console.log("Da ket noi MongoDB"))
-  .catch((err) => console.warn("Chua ket noi duoc MongoDB, chay khong cache:", err.message));

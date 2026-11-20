@@ -11,7 +11,8 @@
 <p class="note">Đây là bản nháp do người phát triển soạn dựa trên hoạt động thực tế của ứng dụng, <strong>chưa qua tư vấn pháp lý</strong>. Cần rà soát nội dung trước khi phát hành.</p>
 <p>Cập nhật: 19/11/2026. Chính sách này mô tả dữ liệu được xử lý khi bạn sử dụng Lumo Lens để dịch chữ trên màn hình.</p>
 <h2>1. Thông tin tài khoản</h2>
-<p>Khi đăng nhập Google, ứng dụng nhận mã định danh Google, email, tên và ảnh đại diện để tạo và xác thực tài khoản. Server lưu thông tin này cùng vai trò, trạng thái tài khoản, gói sử dụng và bộ đếm lượt dịch theo ngày trong MongoDB. Ứng dụng không nhận mật khẩu Google.</p>
+<p>Khi đăng nhập Google, ứng dụng nhận mã định danh Google, email, tên và ảnh đại diện để tạo và xác thực tài khoản. Server lưu thông tin này cùng vai trò, trạng thái tài khoản và gói sử dụng trong MongoDB. Ứng dụng không nhận mật khẩu Google.</p>
+<p>Để chống đặt lại hạn mức bằng cách xoá và tạo lại tài khoản, server lưu riêng mã định danh giả danh, số lượt đã dùng, ngày và thời điểm hết hạn. Bản ghi không chứa email, tên hay mã Google gốc. Số lượt hết hiệu lực lúc 00:00 giờ Việt Nam của ngày tiếp theo và MongoDB tự dọn bản ghi sau mốc này, kể cả khi hồ sơ đã bị xoá.</p>
 <p>Token đăng nhập được lưu trong kho bảo mật của thiết bị (SecureStore), có thời hạn 30 ngày. Cấu hình ứng dụng được lưu trên thiết bị. Thông tin tài khoản được giữ đến khi tài khoản bị xoá.</p>
 <h2>2. Chữ nhận dạng và nhà cung cấp AI bên thứ ba</h2>
 <p>Chữ đọc được từ màn hình được gửi tới server để dịch; khi cần gọi model, server chuyển chữ cùng ngữ cảnh cần thiết tới nhà cung cấp model AI bên thứ ba được cấu hình. Việc xử lý tại bên thứ ba còn tuân theo chính sách của nhà cung cấp đó. Không nên dịch nội dung chứa mật khẩu, thông tin tài chính hoặc dữ liệu nhạy cảm.</p>

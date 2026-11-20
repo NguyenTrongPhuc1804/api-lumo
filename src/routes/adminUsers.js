@@ -2,11 +2,13 @@ import { Router } from "express";
 import { User } from "../models/User.js";
 import { requireAdminUser } from "../middleware/auth.js";
 import { toClientUser } from "./auth.js";
+import { DailyQuota } from "../models/DailyQuota.js";
+import { quotaIdentity, quotaPeriod } from "../services/dailyQuota.js";
 
 // Danh sach tai khoan cho admin. Khong bao gio tra providerId.
-function toAdminListItem(user) {
+function toAdminListItem(user, usage) {
   return {
-    ...toClientUser(user),
+    ...toClientUser(user, usage),
     provider: user.provider ?? "",
     status: user.status ?? "active",
     createdAt: user.createdAt ?? null,
@@ -32,7 +34,14 @@ export function createAdminUsersRouter() {
         User.find().sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
         User.countDocuments(),
       ]);
-      res.json({ items: items.map(toAdminListItem), total, page, limit });
+      const { usageDate } = quotaPeriod();
+      const keys = items.map(quotaIdentity);
+      const rows = keys.length ? await DailyQuota.find({ identityKey: { $in: keys }, usageDate }) : [];
+      const counts = new Map(rows.map((row) => [row.identityKey, row.usageCount]));
+      res.json({
+        items: items.map((user, index) => toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 })),
+        total, page, limit,
+      });
     } catch {
       res.status(503).json({ error: "Database chua ket noi" });
     }

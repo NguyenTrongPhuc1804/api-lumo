@@ -4,7 +4,8 @@ import mongoose from "mongoose";
 import { Translation } from "../models/Translation.js";
 import { translateBatch } from "../services/gemini.js";
 import { requireUser } from "../middleware/auth.js";
-import { consumeQuota, limitFor, refundQuota, todayKey } from "../services/quota.js";
+import { consumeQuota, limitFor, refundQuota } from "../services/quota.js";
+import { readDailyUsage } from "../services/dailyQuota.js";
 
 const router = Router();
 
@@ -48,8 +49,7 @@ router.post("/translate", requireUser, async (req, res) => {
 
   const isAdmin = req.user.role === "admin";
   const limit = limitFor(req.user);
-  // So luot con lai tra cho app. Cap nhat lai sau moi lan tru de khong lech.
-  let remaining = req.user.usageDate === todayKey() ? Math.max(0, limit - req.user.usageCount) : limit;
+  let remaining = limit;
 
   try {
     if (mode === "manga") {
@@ -117,6 +117,11 @@ router.post("/translate", requireUser, async (req, res) => {
         }));
         await Translation.bulkWrite(operations).catch((err) => console.warn("Luu cache loi:", err.message));
       }
+    }
+
+    if (!isAdmin && missing.length === 0) {
+      const usage = await readDailyUsage(req.user);
+      remaining = Math.max(0, limit - usage.usageCount);
     }
 
     // 5. Tra ket qua dung thu tu cua request
