@@ -28,7 +28,9 @@ if (!process.env.QUOTA_HMAC_SECRET?.trim()) {
 // Chay sau nginx: tin 1 lop proxy de req.ip lay dung IP nguoi dung tu X-Forwarded-For
 app.set("trust proxy", 1);
 
+const adminWeb = createAdminWebAuth();
 app.use(helmet());
+app.use("/api/admin-web", adminWeb.cors);
 app.use(express.json({ limit: "200kb" }));
 
 // In ra moi request de biet app co goi toi server hay khong
@@ -51,7 +53,6 @@ app.get("/health", (req, res) => {
 
 app.use("/api", createAuthRouter());
 app.use("/api", createAdminUsersRouter());
-const adminWeb = createAdminWebAuth();
 app.use("/api/admin-web/auth", adminWeb.router);
 app.use("/api/admin-web", createAdminUsersRouter({ prefix: "", authorize: adminWeb.requireSession }));
 app.use("/api", translateRouter);
