@@ -5,12 +5,14 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import mongoose from "mongoose";
 import { User } from "./models/User.js";
+import { AiUsage } from "./services/aiUsage.js";
 import { DailyQuota } from "./models/DailyQuota.js";
 import translateRouter from "./routes/translate.js";
 import modelsRouter, { createAdminModelsRouter } from "./routes/models.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createAdminUsersRouter } from "./routes/adminUsers.js";
 import { createAdminWebAuth } from "./routes/adminWebAuth.js";
+import { createQuotaPolicyRouter } from "./routes/quotaPolicy.js";
 
 const app = express();
 
@@ -57,13 +59,14 @@ app.use("/api", createAdminUsersRouter());
 app.use("/api/admin-web/auth", adminWeb.router);
 app.use("/api/admin-web", createAdminUsersRouter({ prefix: "", authorize: adminWeb.requireSession }));
 app.use("/api/admin-web", createAdminModelsRouter({ prefix: "", authorize: adminWeb.requireSession, web: true }));
+app.use("/api/admin-web", createQuotaPolicyRouter({ authorize: adminWeb.requireSession }));
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);
 
 // Chi nhan request khi index han muc va tai khoan da san sang.
 try {
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
-  await Promise.all([DailyQuota.createIndexes(), User.createIndexes()]);
+  await Promise.all([DailyQuota.createIndexes(), User.createIndexes(), AiUsage.createIndexes()]);
 } catch (err) {
   console.error("Khong the khoi tao MongoDB va index:", err.name, err.code ?? "");
   process.exit(1);

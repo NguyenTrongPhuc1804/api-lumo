@@ -83,7 +83,7 @@ async function setup(t, rows = []) {
 
 test('web preflight allowlisted hỗ trợ PUT và DELETE', async (t) => {
   const { call } = await setup(t);
-  for (const method of ['PUT', 'DELETE']) {
+  for (const method of ['PUT', 'PATCH', 'DELETE']) {
     const headers = { 'Access-Control-Request-Method': method, 'Access-Control-Request-Headers': 'authorization,content-type' };
     const res = await call(`${path}/${id}`, { method: 'OPTIONS', headers });
     assert.equal(res.status, 204);

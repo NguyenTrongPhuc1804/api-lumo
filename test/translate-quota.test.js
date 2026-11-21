@@ -16,6 +16,8 @@ process.env.JWT_SECRET = "test-secret";
 process.env.FREE_DAILY_LIMIT = "1";
 
 const { default: router } = await import("../src/routes/translate.js");
+const { QuotaPolicy } = await import("../src/services/quotaPolicy.js");
+QuotaPolicy.findById = async () => null;
 
 process.env.QUOTA_HMAC_SECRET = "test-quota-secret";
 

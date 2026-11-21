@@ -7,6 +7,9 @@ import express from "express";
 import { DailyQuota } from "../src/models/DailyQuota.js";
 import { quotaIdentity, quotaPeriod } from "../src/services/dailyQuota.js";
 
+const { QuotaPolicy } = await import("../src/services/quotaPolicy.js");
+QuotaPolicy.findById = async () => null;
+
 process.env.QUOTA_HMAC_SECRET = "test-quota-secret";
 
 // Thay User.findById de requireUser tra dung tai khoan theo token.

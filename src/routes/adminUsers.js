@@ -4,12 +4,13 @@ import { User } from "../models/User.js";
 import { requireAdminUser } from "../middleware/auth.js";
 import { toClientUser } from "./auth.js";
 import { DailyQuota } from "../models/DailyQuota.js";
+import { readQuotaPolicy } from "../services/quotaPolicy.js";
 import { quotaIdentity, quotaPeriod } from "../services/dailyQuota.js";
 
 // Danh sach tai khoan cho admin. Khong bao gio tra providerId.
-function toAdminListItem(user, usage) {
+function toAdminListItem(user, usage, freeLimit) {
   return {
-    ...toClientUser(user, usage),
+    ...toClientUser(user, usage, freeLimit),
     provider: user.provider ?? "",
     status: user.status ?? "active",
     createdAt: user.createdAt ?? null,
@@ -58,7 +59,9 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
       const { usageDate } = quotaPeriod();
       const keys = items.map((user) => user.provider === "web" ? null : quotaIdentity(user));
       const quotaKeys = keys.filter(Boolean);
-      const rows = quotaKeys.length ? await DailyQuota.find({ identityKey: { $in: quotaKeys }, usageDate }) : [];
+      const [rows, policy] = quotaKeys.length ? await Promise.all([
+        DailyQuota.find({ identityKey: { $in: quotaKeys }, usageDate }), readQuotaPolicy(),
+      ]) : [[], null];
       const counts = new Map(rows.map((row) => [row.identityKey, row.usageCount]));
       res.json({
         items: items.map((user, index) => {
@@ -71,7 +74,7 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
             };
           }
           return {
-            ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }),
+            ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }, policy?.freeLimit),
             ...(req.adminWeb && { webAdminGranted: Boolean(user.webAdmin) }),
             ...(isOwner && user.webAdmin && { webAdminLoginEmail: user.webAdmin.loginEmail }),
           };

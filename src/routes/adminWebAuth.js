@@ -51,7 +51,7 @@ export function createAdminWebAuth(config = process.env, now = Date.now) {
     }
     res.set('Access-Control-Allow-Origin', origin);
     if (req.method === 'OPTIONS') {
-      res.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE');
+      res.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE');
       res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
       return res.status(204).end();
     }

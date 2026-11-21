@@ -4,6 +4,9 @@ import { scryptSync } from 'node:crypto';
 import express from 'express';
 import { createAdminWebAuth } from '../src/routes/adminWebAuth.js';
 import { createAdminUsersRouter } from '../src/routes/adminUsers.js';
+import { QuotaPolicy } from '../src/services/quotaPolicy.js';
+
+QuotaPolicy.findById = async () => null;
 import { User } from '../src/models/User.js';
 import { DailyQuota } from '../src/models/DailyQuota.js';
 import { createAuthRouter } from '../src/routes/auth.js';

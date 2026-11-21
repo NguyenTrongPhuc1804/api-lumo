@@ -2,6 +2,7 @@
 
 import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
+import { recordAiCall } from './aiUsage.js';
 
 const BASE_URL = process.env.REVID_BASE_URL || "https://revidapi.com";
 const API_KEY = process.env.REVID_API_KEY;
@@ -61,6 +62,9 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
   };
   if (temperature !== null) requestBody.temperature = temperature;
 
+  if (opts.usageGroup) {
+    void recordAiCall(opts.usageGroup).catch(() => console.warn('Không ghi được thống kê lượt gọi AI'));
+  }
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {

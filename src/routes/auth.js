@@ -6,6 +6,7 @@ import { exchangeGoogleCode as realExchangeGoogleCode } from "../services/google
 import { requireUser } from "../middleware/auth.js";
 import { limitFor } from "../services/quota.js";
 import { readDailyUsage } from "../services/dailyQuota.js";
+import { readQuotaPolicy } from "../services/quotaPolicy.js";
 
 // Ten tham so trong duong dan, tranh go nham o nhieu cho
 const STATE_TTL = "10m";
@@ -13,7 +14,7 @@ const STATE_TTL = "10m";
 // Hop le hoa mot user thanh JSON tra cho app. Khong bao gio tra providerId.
 // Han muc phai dung limitFor() vi dailyLimit = 0 nghia la "lay tu .env",
 // neu tra thang 0 thi app hieu nham la khong gioi han.
-export function toClientUser(user, { usageCount, usageDate }) {
+export function toClientUser(user, { usageCount, usageDate }, freeLimit) {
   return {
     id: String(user._id ?? user.id ?? ""),
     email: user.email ?? "",
@@ -22,7 +23,7 @@ export function toClientUser(user, { usageCount, usageDate }) {
     role: user.role ?? "user",
     plan: user.plan ?? "free",
     isAdmin: user.role === "admin",
-    dailyLimit: limitFor(user),
+    dailyLimit: limitFor(user, freeLimit),
     usageCount,
     usageDate,
   };
@@ -95,8 +96,8 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
 
   router.get("/me", requireUser, async (req, res) => {
     try {
-      const usage = await readDailyUsage(req.user);
-      res.json(toClientUser(req.user, usage));
+      const [usage, policy] = await Promise.all([readDailyUsage(req.user), readQuotaPolicy()]);
+      res.json(toClientUser(req.user, usage, policy.freeLimit));
     } catch {
       res.status(503).json({ error: "Không tải được hạn mức dịch" });
     }

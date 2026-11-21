@@ -1,12 +1,12 @@
 import { chargeDailyUsage, refundDailyUsage } from "./dailyQuota.js";
+import { defaultFreeLimit } from "./quotaPolicy.js";
 
-export function limitFor(user) {
-  if (user.dailyLimit > 0) return user.dailyLimit;
-  return Number(process.env.FREE_DAILY_LIMIT) || 100;
+export function limitFor(user, freeLimit = defaultFreeLimit()) {
+  return user.dailyLimit > 0 ? user.dailyLimit : freeLimit;
 }
 
-export async function consumeQuota(user, cost = 1) {
-  return chargeDailyUsage(user, limitFor(user), cost);
+export async function consumeQuota(user, cost = 1, limit = limitFor(user)) {
+  return chargeDailyUsage(user, limit, cost);
 }
 
 export async function refundQuota(user, usageDate, cost = 1) {

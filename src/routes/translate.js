@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import { Router } from "express";
 import mongoose from "mongoose";
+import { AiModel } from "../models/AiModel.js";
 import { Translation } from "../models/Translation.js";
 import { translateBatch } from "../services/gemini.js";
 import { requireUser } from "../middleware/auth.js";
 import { consumeQuota, limitFor, refundQuota } from "../services/quota.js";
 import { readDailyUsage } from "../services/dailyQuota.js";
+import { rateLimit } from "express-rate-limit";
+import { readQuotaPolicy } from "../services/quotaPolicy.js";
+import { chargeGuestTrial, readGuestToken, refundGuestTrial, startGuestTrial } from "../services/guestTrial.js";
 
 const router = Router();
 
@@ -21,8 +25,34 @@ function makeKey(sourceLang, targetLang, text, model) {
 // POST /api/translate
 // body: { texts: ["Hello", "World"], sourceLang: "auto", targetLang: "vi" }
 // tra ve: { translations: ["Xin chao", "The gioi"], cached: 1 }
-router.post("/translate", requireUser, async (req, res) => {
-  const { texts, sourceLang = "auto", targetLang, mode = "game", context = [] } = req.body;
+const guestRate = (limit) => rateLimit({ windowMs: 60_000, limit, handler: (_req, res) => {
+  res.status(429).json({ code: "RATE_LIMITED", error: "Thao tác quá nhanh, vui lòng thử lại sau" });
+} });
+
+router.post("/guest/session", guestRate(12), async (req, res) => {
+  const { installId } = req.body ?? {};
+  if (typeof installId !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(installId)) {
+    return res.status(400).json({ error: "Mã bản cài không hợp lệ" });
+  }
+  try {
+    res.json(await startGuestTrial(installId.toLowerCase()));
+  } catch {
+    res.status(503).json({ error: "Không tải được lượt dùng thử" });
+  }
+});
+
+router.post("/guest/translate", guestRate(20), (req, res, next) => {
+  try {
+    req.guestKey = readGuestToken((req.get("authorization") ?? "").replace(/^Bearer /, ""));
+  } catch {
+    return res.status(401).json({ error: "Phiên dùng thử đã hết hạn" });
+  }
+  next();
+}, translate);
+router.post("/translate", requireUser, translate);
+
+async function translate(req, res) {
+  const { texts, sourceLang = "auto", targetLang, mode = "game", context = [] } = req.body ?? {};
   if (mode !== "game" && mode !== "manga") return res.status(400).json({ error: "Mode khong hop le" });
   if (!Array.isArray(context) || context.length > 3 || context.some(turn =>
     !Array.isArray(turn) || turn.length === 0 || turn.length > 3000 || turn.some(pair =>
@@ -34,7 +64,8 @@ router.post("/translate", requireUser, async (req, res) => {
   if (contextLength > 6000 || (mode === "game" && context.length > 0)) {
     return res.status(400).json({ error: "Context vuot gioi han hoac khong dung mode" });
   }
-  const model = typeof req.body.model === "string" ? req.body.model : "";
+  const guest = Boolean(req.guestKey);
+  let model = typeof req.body.model === "string" ? req.body.model : "";
 
   // 1. Kiem tra du lieu dau vao
   if (!Array.isArray(texts) || texts.length === 0 || texts.length > MAX_ITEMS) {
@@ -47,25 +78,35 @@ router.post("/translate", requireUser, async (req, res) => {
     return res.status(400).json({ error: "Thieu sourceLang hoac targetLang" });
   }
 
-  const isAdmin = req.user.role === "admin";
-  const limit = limitFor(req.user);
-  let remaining = limit;
-
+  // Theo gói, không theo vai trò quản trị. Chỉ Guest/Free đang hoạt động.
+  const usageGroup = guest ? 'guest' : 'free';
+  const isAdmin = req.user?.role === "admin";
+  let guestCharged = false;
   try {
+    const limit = guest || isAdmin ? 0 : limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
+    let remaining = limit;
+    if (guest) {
+      remaining = await chargeGuestTrial(req.guestKey);
+      if (remaining === null) return res.status(429).json({ code: "TRIAL_EXHAUSTED", error: "Đã hết lượt dùng thử", remaining: 0 });
+      guestCharged = true;
+      const selected = await AiModel.findOne({ enabled: true }).sort({ order: 1, _id: 1 }).lean();
+      if (!selected) throw new Error("Chưa có model hoạt động");
+      model = selected.code;
+    }
     if (mode === "manga") {
       // Manga khong dung cache nen moi lan quet la mot luot that.
       let chargedDate = "";
-      if (!isAdmin) {
-        const quota = await consumeQuota(req.user);
+      if (!isAdmin && !guest) {
+        const quota = await consumeQuota(req.user, 1, limit);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
         remaining = quota.remaining;
         chargedDate = quota.usageDate;
       }
       try {
-        const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context });
+        const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context, usageGroup });
         return res.json({ translations, cached: 0, remaining: isAdmin ? null : remaining });
       } catch (err) {
-        if (!isAdmin) await refundQuota(req.user, chargedDate);
+        if (!isAdmin && !guest) await refundQuota(req.user, chargedDate);
         throw err;
       }
     }
@@ -88,8 +129,8 @@ router.post("/translate", requireUser, async (req, res) => {
     if (missing.length > 0) {
       // Chi tru luot khi that su phai goi model. Trung cache thi khong ton tien.
       let chargedDate = "";
-      if (!isAdmin) {
-        const quota = await consumeQuota(req.user);
+      if (!isAdmin && !guest) {
+        const quota = await consumeQuota(req.user, 1, limit);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
         remaining = quota.remaining;
         chargedDate = quota.usageDate;
@@ -97,10 +138,10 @@ router.post("/translate", requireUser, async (req, res) => {
 
       let translated;
       try {
-        translated = await translateBatch(missing, sourceLang, targetLang, model);
+        translated = await translateBatch(missing, sourceLang, targetLang, model, { usageGroup });
       } catch (err) {
         // Goi model that bai thi tra lai luot da tru.
-        if (!isAdmin) await refundQuota(req.user, chargedDate);
+        if (!isAdmin && !guest) await refundQuota(req.user, chargedDate);
         throw err;
       }
 
@@ -119,7 +160,7 @@ router.post("/translate", requireUser, async (req, res) => {
       }
     }
 
-    if (!isAdmin && missing.length === 0) {
+    if (!isAdmin && !guest && missing.length === 0) {
       const usage = await readDailyUsage(req.user);
       remaining = Math.max(0, limit - usage.usageCount);
     }
@@ -127,9 +168,10 @@ router.post("/translate", requireUser, async (req, res) => {
     // 5. Tra ket qua dung thu tu cua request
     res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin ? null : remaining });
   } catch (err) {
+    if (guestCharged) await refundGuestTrial(req.guestKey).catch(() => console.warn("Không hoàn được lượt khách"));
     console.error("Dich loi:", err.message);
     res.status(502).json({ error: "Khong dich duoc, thu lai sau" });
   }
-});
+}
 
 export default router;
