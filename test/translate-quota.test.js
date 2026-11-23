@@ -21,6 +21,15 @@ QuotaPolicy.findById = async () => null;
 
 process.env.QUOTA_HMAC_SECRET = "test-quota-secret";
 
+test('model trả xu mặc định không gọi AI và không trừ lượt Free', async () => {
+  const state = { user: freeUser(), coinPrice: 3, modelCalls: 0 };
+  const result = await callTranslate({ body: { texts: ['Hi'], coinPrice: 0 }, state });
+  assert.equal(result.status, 503);
+  assert.equal(result.body.code, 'COIN_PAYMENTS_DISABLED');
+  assert.equal(state.modelCalls, 0);
+  assert.equal(state.quota, undefined);
+});
+
 const freeUser = () => ({
   provider: "google",
   providerId: "g-free",
@@ -44,7 +53,7 @@ function stubWorld(state) {
     fetch: globalThis.fetch,
   };
   User.findById = async (id) => (id === state.user._id ? state.user : null);
-  AiModel.findOne = () => ({ lean: async () => ({ code: "test", baseUrl: "https://model.test", apiKey: "secret" }) });
+  AiModel.findOne = () => ({ lean: async () => ({ code: "test", baseUrl: "https://model.test", apiKey: "secret", coinPrice: state.coinPrice }) });
   Translation.find = async ({ key }) => {
     if (!state.cached) return [];
     // find duoc goi voi { key: { $in: [...] } }, khong phai mang truc tiep.

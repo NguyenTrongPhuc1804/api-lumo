@@ -28,11 +28,18 @@ export async function readQuotaPolicy() {
   };
 }
 
-export const bonusRuleKeys = ['checkIn', 'referral', 'rewardedVideo'];
+export const bonusRuleKeys = ['referral', 'rewardedVideo'];
+
+function bonusRulesOf(doc) {
+  return Object.fromEntries(bonusRuleKeys.map((key) => {
+    const rule = doc?.bonusRules?.[key];
+    return [key, rule ? { ...rule, enabled: rule.enabled === true } : null];
+  }));
+}
 
 export async function readBonusRules() {
   const doc = await QuotaPolicy.findById(policyId, { audit: 0 });
-  return { revision: doc?.revision ?? 0, rules: Object.fromEntries(bonusRuleKeys.map((key) => [key, doc?.bonusRules?.[key] ?? null])) };
+  return { revision: doc?.revision ?? 0, rules: bonusRulesOf(doc) };
 }
 
 export async function readPolicyAudit() {
@@ -48,13 +55,14 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
   };
   const conflict = () => Object.assign(new Error('Chính sách đã thay đổi. Hãy tải lại trước khi lưu.'), { status: 409 });
   if (revision !== current.revision) throw conflict();
-  const rules = Object.fromEntries(bonusRuleKeys.map((key) => [key, doc?.bonusRules?.[key] ?? null]));
+  const rules = bonusRulesOf(doc);
   const previous = rule && rules[rule];
+  if (rule) bonus = { ...bonus, enabled: bonus.enabled ?? previous?.enabled ?? false };
   const changes = rule
     ? (previous && Object.keys(bonus).every((key) => previous[key] === bonus[key]) ? [] : [{ field: `bonusRules.${rule}`, before: previous, after: bonus }])
     : Object.keys(limits).filter((key) => current[key] !== limits[key]).map((key) => ({ field: key, before: current[key], after: limits[key] }));
   if (!changes.length) return rule ? { rules, revision } : current;
-  const fields = rule ? { bonusRules: { ...rules, [rule]: bonus } } : limits;
+  const fields = rule ? { [`bonusRules.${rule}`]: bonus } : limits;
   const filter = { _id: policyId, revision: doc?.revision ?? { $exists: false } };
   try {
     const result = await QuotaPolicy.updateOne(filter, {
@@ -66,5 +74,5 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
     if (error.code === 11000) throw conflict();
     throw error;
   }
-  return rule ? { rules: fields.bonusRules, revision: revision + 1 } : { ...current, ...limits, updatedBy, updatedAt, revision: revision + 1 };
+  return rule ? { rules: { ...rules, [rule]: bonus }, revision: revision + 1 } : { ...current, ...limits, updatedBy, updatedAt, revision: revision + 1 };
 }

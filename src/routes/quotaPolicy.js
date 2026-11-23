@@ -4,7 +4,7 @@ import { bonusRuleKeys, readBonusRules, readPolicyAudit, readQuotaPolicy, saveQu
 import { readAiUsage } from '../services/aiUsage.js';
 
 const validRevision = (revision) => Number.isSafeInteger(revision) && revision >= 0;
-const bonusPeriods = { checkIn: ['day', 'week', 'month'], referral: ['installation', 'month'], rewardedVideo: ['view', 'day'] };
+const bonusPeriods = { referral: ['installation', 'month'], rewardedVideo: ['view', 'day'] };
 
 export function createQuotaPolicyRouter({ authorize, read = readQuotaPolicy, save = saveQuotaPolicy }) {
   const router = Router();
@@ -44,13 +44,14 @@ export function createQuotaPolicyRouter({ authorize, read = readQuotaPolicy, sav
     if (req.adminWeb.role !== 'owner') return res.sendStatus(403);
     const { rule } = req.params;
     if (!bonusRuleKeys.includes(rule)) return res.status(404).json({ error: 'Không tìm thấy quy tắc bonus' });
-    const { reward, maxClaims, period, revision } = req.body ?? {};
+    const { reward, maxClaims, period, revision, enabled } = req.body ?? {};
+    if (enabled !== undefined && typeof enabled !== 'boolean') return res.status(400).json({ error: 'Trạng thái bonus không hợp lệ' });
     if (!validRevision(revision) || !Number.isInteger(reward) || reward < 1 || reward > 10000 ||
         !Number.isInteger(maxClaims) || maxClaims < 1 || maxClaims > 100 || !bonusPeriods[rule].includes(period)) {
-      return res.status(400).json({ error: 'Nhập 1–10.000 lượt, 1–100 lần nhận và chu kỳ hợp lệ' });
+      return res.status(400).json({ error: 'Nhập 1–10.000 xu, 1–100 lần nhận và chu kỳ hợp lệ' });
     }
     try {
-      res.json(await save({ rule, bonus: { reward, maxClaims, period }, revision, updatedBy: req.adminWeb.username, updatedAt: new Date() }));
+      res.json(await save({ rule, bonus: { reward, maxClaims, period, enabled }, revision, updatedBy: req.adminWeb.username, updatedAt: new Date() }));
     } catch (error) {
       if (error.status === 409) return res.status(409).json({ error: error.message });
       res.status(503).json({ error: 'Không lưu được cấu hình bonus' });

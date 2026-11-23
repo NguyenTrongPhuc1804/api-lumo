@@ -14,6 +14,13 @@ test("description preserves lines, clears explicitly and validates type/length",
   assert.throws(() => readModelFields({ description: 42 }), /mô tả/i);
   assert.throws(() => readModelFields({ description: "a".repeat(501) }), /500/);
 });
+test("coin price defaults to zero and rejects invalid inputs", () => {
+  assert.equal(new AiModel({ code: 'a', name: 'A' }).coinPrice, 0);
+  assert.equal(toClient({ code: 'a', name: 'A' }, false).coinPrice, 0);
+  assert.equal(readModelFields({ coinPrice: 5 }).coinPrice, 5);
+  for (const coinPrice of [-1, 1.5, '5', 10001]) assert.throws(() => readModelFields({ coinPrice }), /xu/);
+});
+
 test("description round trips without leaking full keys, old records default empty", () => {
   const doc = { _id: "1", code: "test", name: "Test", apiKey: "secret-key-value", description: "Hello\nWorld" };
   assert.equal(toClient(doc, false).description, doc.description);

@@ -13,9 +13,9 @@ function maskKey(key) {
 }
 
 export function toClient(doc, withKey, adminFields = withKey) {
-  const { _id, code, name, baseUrl, apiKey, enabled, order, description = "" } = doc;
-  if (!adminFields) return { code, name, description };
-  return { id: _id, code, name, description, baseUrl, ...(withKey && { apiKey: maskKey(apiKey) }), enabled, order };
+  const { _id, code, name, baseUrl, apiKey, enabled, order, description = "", coinPrice = 0 } = doc;
+  if (!adminFields) return { code, name, description, coinPrice };
+  return { id: _id, code, name, description, coinPrice, baseUrl, ...(withKey && { apiKey: maskKey(apiKey) }), enabled, order };
 }
 
 // Bo ky tu dieu khien hay bi dinh khi dan tu clipboard (vd \u0016 o dau chuoi)
@@ -40,6 +40,12 @@ export function readModelFields(body) {
   }
   for (const key of ["code", "name", "baseUrl", "apiKey"]) {
     if (typeof body[key] === "string" && body[key].trim()) fields[key] = cleanText(body[key]);
+  }
+  if (Object.hasOwn(body, "coinPrice")) {
+    if (!Number.isInteger(body.coinPrice) || body.coinPrice < 0 || body.coinPrice > 10000) {
+      throw Object.assign(new Error("Giá xu phải là số nguyên từ 0 đến 10.000"), { status: 400 });
+    }
+    fields.coinPrice = body.coinPrice;
   }
   if (typeof body.enabled === "boolean") fields.enabled = body.enabled;
   if (typeof body.order === "number") fields.order = body.order;
@@ -128,6 +134,7 @@ async function createModel(req, res, web) {
   }
 
   const fields = readModelFields(req.body ?? {});
+  if (!web && fields.coinPrice !== undefined) return res.status(403).json({ error: 'Chỉ Owner trên web được đặt giá xu' });
   const { code, name, baseUrl = "", apiKey = "", enabled = true, order = 0 } = web ? fields : { ...req.body, ...fields };
   if (web && await needsNewKey(baseUrl, apiKey)) return res.status(400).json({ error: newKeyError });
 
@@ -153,6 +160,7 @@ async function createModel(req, res, web) {
     apiKey: typeof apiKey === "string" ? apiKey.trim() : "",
     enabled: Boolean(enabled),
     order: Number(order) || 0,
+    coinPrice: fields.coinPrice ?? 0,
   });
 
   res.status(201).json({ ok: true, model: toClient(created.toObject(), true) });
@@ -168,6 +176,7 @@ async function updateModel(req, res, web) {
 
   const body = req.body ?? {};
   const fields = readModelFields(body);
+  if (!web && fields.coinPrice !== undefined) return res.status(403).json({ error: 'Chỉ Owner trên web được đặt giá xu' });
   if (web && Object.hasOwn(body, "baseUrl")) {
     if (typeof body.baseUrl !== "string") return res.status(400).json({ error: "Base URL không hợp lệ" });
     fields.baseUrl = cleanText(body.baseUrl);

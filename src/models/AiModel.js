@@ -9,6 +9,7 @@ const aiModelSchema = new mongoose.Schema({
   apiKey: { type: String, default: "", trim: true }, // de trong thi dung REVID_API_KEY trong .env
   enabled: { type: Boolean, default: true },
   order: { type: Number, default: 0 },
+  coinPrice: { type: Number, default: 0, min: 0, max: 10000, validate: Number.isInteger },
   createdAt: { type: Date, default: Date.now },
 });
 

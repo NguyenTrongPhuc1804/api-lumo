@@ -107,7 +107,7 @@ export async function translateBatch(texts, sourceLang, targetLang, modelCode, o
     throw new Error("Database chua ket noi, khong doc duoc model");
   }
 
-  const doc = await AiModel.findOne({ code: modelCode, enabled: true }).lean();
+  const doc = options.modelConfig ?? await AiModel.findOne({ code: modelCode, enabled: true }).lean();
   if (!doc) throw new Error(`Model '${modelCode}' khong ton tai hoac dang tat`);
 
   return await callModel(doc.code, texts, sourceLang, targetLang, doc.baseUrl, doc.apiKey, options);

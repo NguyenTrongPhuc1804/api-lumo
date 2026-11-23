@@ -143,7 +143,7 @@ test('web models chỉ cho owner và admin đọc, chỉ owner thấy khóa đã
   const admin = await login('admin@example.com');
   const viewer = await login('viewer@example.com');
   const pending = await login('pending@example.com');
-  const expected = { id, code: 'test', name: 'Test', description: '', baseUrl, enabled: false, order: 2 };
+  const expected = { id, code: 'test', name: 'Test', description: '', coinPrice: 0, baseUrl, enabled: false, order: 2 };
   for (const [token, item] of [[owner, { ...expected, apiKey: 'sav...-key' }], [admin, expected]]) {
     const response = await call(path, { token });
     assert.equal(response.status, 200);

@@ -6,6 +6,7 @@ import { toClientUser } from "./auth.js";
 import { DailyQuota } from "../models/DailyQuota.js";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
 import { quotaIdentity, quotaPeriod } from "../services/dailyQuota.js";
+import { CoinWallet, coinPaymentsEnabled, proExpiresAt } from "../services/coinWallet.js";
 
 // Danh sach tai khoan cho admin. Khong bao gio tra providerId.
 function toAdminListItem(user, usage, freeLimit) {
@@ -62,6 +63,9 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
       const [rows, policy] = quotaKeys.length ? await Promise.all([
         DailyQuota.find({ identityKey: { $in: quotaKeys }, usageDate }), readQuotaPolicy(),
       ]) : [[], null];
+      const coinsEnabled = coinPaymentsEnabled();
+      const wallets = coinsEnabled && quotaKeys.length ? await CoinWallet.find({ _id: { $in: quotaKeys } }).lean() : [];
+      const expiries = new Map(wallets.map((wallet) => [wallet._id, proExpiresAt(wallet)]));
       const counts = new Map(rows.map((row) => [row.identityKey, row.usageCount]));
       res.json({
         items: items.map((user, index) => {
@@ -75,6 +79,7 @@ export function createAdminUsersRouter({ prefix = "/admin", authorize = requireA
           }
           return {
             ...toAdminListItem(user, { usageDate, usageCount: counts.get(keys[index]) ?? 0 }, policy?.freeLimit),
+            ...(coinsEnabled && { plan: expiries.get(keys[index]) ? 'pro' : 'free', proExpiresAt: expiries.get(keys[index]) ?? null }),
             ...(req.adminWeb && { webAdminGranted: Boolean(user.webAdmin) }),
             ...(isOwner && user.webAdmin && { webAdminLoginEmail: user.webAdmin.loginEmail }),
           };

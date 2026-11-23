@@ -13,6 +13,8 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createAdminUsersRouter } from "./routes/adminUsers.js";
 import { createAdminWebAuth } from "./routes/adminWebAuth.js";
 import { createQuotaPolicyRouter } from "./routes/quotaPolicy.js";
+import { createPlayProRouter } from "./routes/playPro.js";
+import { playProConfig } from "./services/playPro.js";
 
 const app = express();
 
@@ -54,6 +56,8 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, db: mongoose.connection.readyState === 1 });
 });
 
+const playPro = playProConfig();
+app.use("/api", createPlayProRouter(playPro));
 app.use("/api", createAuthRouter());
 app.use("/api", createAdminUsersRouter());
 app.use("/api/admin-web/auth", adminWeb.router);
@@ -66,6 +70,13 @@ app.use("/api", modelsRouter);
 // Chi nhan request khi index han muc va tai khoan da san sang.
 try {
   await mongoose.connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+  if (playPro) {
+    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
+    if (!topology.setName && topology.msg !== 'isdbgrid') {
+      console.error('PLAY_PRO_ENABLED yêu cầu MongoDB hỗ trợ transaction (replica set hoặc sharded cluster)');
+      process.exit(1);
+    }
+  }
   await Promise.all([DailyQuota.createIndexes(), User.createIndexes(), AiUsage.createIndexes()]);
 } catch (err) {
   console.error("Khong the khoi tao MongoDB va index:", err.name, err.code ?? "");

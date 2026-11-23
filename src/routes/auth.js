@@ -7,6 +7,9 @@ import { requireUser } from "../middleware/auth.js";
 import { limitFor } from "../services/quota.js";
 import { readDailyUsage } from "../services/dailyQuota.js";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
+import { CoinWallet, coinPaymentsEnabled, proExpiresAt, walletBalance } from "../services/coinWallet.js";
+import { quotaIdentity } from "../services/dailyQuota.js";
+import { playProConfig } from "../services/playPro.js";
 
 // Ten tham so trong duong dan, tranh go nham o nhieu cho
 const STATE_TTL = "10m";
@@ -96,8 +99,18 @@ export function createAuthRouter({ exchangeGoogleCode = realExchangeGoogleCode }
 
   router.get("/me", requireUser, async (req, res) => {
     try {
-      const [usage, policy] = await Promise.all([readDailyUsage(req.user), readQuotaPolicy()]);
-      res.json(toClientUser(req.user, usage, policy.freeLimit));
+      const play = playProConfig();
+      const coinEnabled = coinPaymentsEnabled();
+      const walletId = coinEnabled ? quotaIdentity(req.user) : null;
+      const [usage, policy, wallet] = await Promise.all([
+        readDailyUsage(req.user), readQuotaPolicy(), walletId ? CoinWallet.findById(walletId).lean() : null,
+      ]);
+      const expiresAt = proExpiresAt(wallet);
+      res.json({ ...toClientUser(req.user, usage, policy.freeLimit),
+        ...(coinEnabled && { plan: expiresAt ? 'pro' : 'free', proExpiresAt: expiresAt }),
+        coinBalance: walletBalance(wallet), coinPaymentsEnabled: coinEnabled,
+        ...(play && { playPro: { productId: play.productId, basePlanId: play.basePlanId, monthlyCoins: play.monthlyCoins, accountId: walletId } }),
+      });
     } catch {
       res.status(503).json({ error: "Không tải được hạn mức dịch" });
     }

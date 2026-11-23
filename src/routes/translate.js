@@ -11,6 +11,8 @@ import { rateLimit } from "express-rate-limit";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
 import { chargeGuestTrial, readGuestToken, refundGuestTrial, startGuestTrial } from "../services/guestTrial.js";
 
+import { coinPaymentsEnabled, debitCoins, refundCoins } from '../services/coinWallet.js';
+
 const router = Router();
 
 const MAX_ITEMS = 50;
@@ -82,6 +84,9 @@ async function translate(req, res) {
   const usageGroup = guest ? 'guest' : 'free';
   const isAdmin = req.user?.role === "admin";
   let guestCharged = false;
+  let modelConfig;
+  let coinDebit;
+  let chargedDate;
   try {
     const limit = guest || isAdmin ? 0 : limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
     let remaining = limit;
@@ -89,26 +94,16 @@ async function translate(req, res) {
       remaining = await chargeGuestTrial(req.guestKey);
       if (remaining === null) return res.status(429).json({ code: "TRIAL_EXHAUSTED", error: "Đã hết lượt dùng thử", remaining: 0 });
       guestCharged = true;
-      const selected = await AiModel.findOne({ enabled: true }).sort({ order: 1, _id: 1 }).lean();
-      if (!selected) throw new Error("Chưa có model hoạt động");
-      model = selected.code;
+      modelConfig = await AiModel.findOne({ enabled: true, $or: [{ coinPrice: 0 }, { coinPrice: { $exists: false } }] }).sort({ order: 1, _id: 1 }).lean();
+      if (!modelConfig) throw new Error("Chưa có model cơ bản hoạt động");
+      model = modelConfig.code;
+    } else if (mongoose.connection.readyState === 1 && model) {
+      modelConfig = await AiModel.findOne({ code: model, enabled: true }).lean();
+      if (!modelConfig) return res.status(400).json({ error: "Model không tồn tại hoặc đang tắt" });
     }
-    if (mode === "manga") {
-      // Manga khong dung cache nen moi lan quet la mot luot that.
-      let chargedDate = "";
-      if (!isAdmin && !guest) {
-        const quota = await consumeQuota(req.user, 1, limit);
-        if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
-        remaining = quota.remaining;
-        chargedDate = quota.usageDate;
-      }
-      try {
-        const translations = await translateBatch(texts, sourceLang, targetLang, model, { mode, context, usageGroup });
-        return res.json({ translations, cached: 0, remaining: isAdmin ? null : remaining });
-      } catch (err) {
-        if (!isAdmin && !guest) await refundQuota(req.user, chargedDate);
-        throw err;
-      }
+    const coinPrice = modelConfig?.coinPrice ?? 0;
+    if (coinPrice > 0 && (guest || !coinPaymentsEnabled())) {
+      return res.status(503).json({ code: 'COIN_PAYMENTS_DISABLED', error: 'Model trả xu chưa khả dụng' });
     }
     // 2. Tim ban dich da luu (neu Mongo dang chay)
     const dbReady = mongoose.connection.readyState === 1 && mode === "game";
@@ -124,12 +119,14 @@ async function translate(req, res) {
     const cachedCount = resultByText.size;
 
     // 3. Chi dich nhung cau chua co, bo cau trung nhau
-    const missing = [...new Set(texts.filter((t) => !resultByText.has(t)))];
+    const missing = mode === 'manga' ? texts : [...new Set(texts.filter((t) => !resultByText.has(t)))];
 
     if (missing.length > 0) {
-      // Chi tru luot khi that su phai goi model. Trung cache thi khong ton tien.
-      let chargedDate = "";
-      if (!isAdmin && !guest) {
+      // Chỉ trừ lượt hoặc xu khi phải gọi AI.
+      if (!guest && coinPrice > 0) {
+        coinDebit = await debitCoins(req.user, coinPrice);
+        if (!coinDebit) return res.status(429).json({ code: 'INSUFFICIENT_COINS', error: 'Không đủ xu để dùng model này' });
+      } else if (!isAdmin && !guest) {
         const quota = await consumeQuota(req.user, 1, limit);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
         remaining = quota.remaining;
@@ -138,12 +135,13 @@ async function translate(req, res) {
 
       let translated;
       try {
-        translated = await translateBatch(missing, sourceLang, targetLang, model, { usageGroup });
+        translated = await translateBatch(missing, sourceLang, targetLang, model, { mode, context, usageGroup, modelConfig });
       } catch (err) {
-        // Goi model that bai thi tra lai luot da tru.
-        if (!isAdmin && !guest) await refundQuota(req.user, chargedDate);
+        if (coinDebit) await refundCoins(coinDebit.id).catch(() => console.error('Không hoàn được xu:', coinDebit.id));
+        else if (chargedDate) await refundQuota(req.user, chargedDate);
         throw err;
       }
+      if (mode === 'manga') return res.json({ translations: translated, cached: 0, remaining: isAdmin || coinDebit ? null : remaining, ...(coinDebit && { coinBalance: coinDebit.balance }) });
 
       missing.forEach((text, i) => resultByText.set(text, translated[i]));
 
@@ -166,7 +164,7 @@ async function translate(req, res) {
     }
 
     // 5. Tra ket qua dung thu tu cua request
-    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin ? null : remaining });
+    res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin || coinDebit ? null : remaining, ...(coinDebit && { coinBalance: coinDebit.balance }) });
   } catch (err) {
     if (guestCharged) await refundGuestTrial(req.guestKey).catch(() => console.warn("Không hoàn được lượt khách"));
     console.error("Dich loi:", err.message);
