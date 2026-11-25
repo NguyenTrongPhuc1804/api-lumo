@@ -14,6 +14,11 @@ export const QuotaPolicy = mongoose.model('QuotaPolicy', new mongoose.Schema({
 
 const policyId = 'translation';
 
+export function logQuotaPolicy(event, details = {}) {
+  if (process.env.DEBUG_QUOTA_POLICY !== 'true') return;
+  console.log('[quota-policy:shared-ai-v1]', JSON.stringify({ time: new Date().toISOString(), pid: process.pid, event, ...details }));
+}
+
 export function defaultFreeLimit() {
   return Number(process.env.FREE_DAILY_LIMIT) || 100;
 }
@@ -57,6 +62,11 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
     revision: doc?.revision ?? 0, updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null,
   };
   const conflict = () => Object.assign(new Error('Chính sách đã thay đổi. Hãy tải lại trước khi lưu.'), { status: 409 });
+  if (!rule) logQuotaPolicy('db.before_write', {
+    db: QuotaPolicy.db.name, readPreference: QuotaPolicy.db.getClient()?.options.readPreference?.mode,
+    exists: Boolean(doc), revision: current.revision, sharedAiModelId: current.sharedAiModelId,
+    requestedRevision: revision, requestedSharedAiModelId: limits.sharedAiModelId,
+  });
   if (revision !== current.revision) throw conflict();
   const rules = bonusRulesOf(doc);
   const previous = rule && rules[rule];
@@ -64,7 +74,10 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
   const changes = rule
     ? (previous && Object.keys(bonus).every((key) => previous[key] === bonus[key]) ? [] : [{ field: `bonusRules.${rule}`, before: previous, after: bonus }])
     : Object.keys(limits).filter((key) => current[key] !== limits[key]).map((key) => ({ field: key, before: current[key], after: limits[key] }));
-  if (!changes.length) return rule ? { rules, revision } : current;
+  if (!changes.length) {
+    if (!rule) logQuotaPolicy('db.no_change', { revision });
+    return rule ? { rules, revision } : current;
+  }
   const fields = rule ? { [`bonusRules.${rule}`]: bonus } : limits;
   const filter = { _id: policyId, revision: doc?.revision ?? { $exists: false } };
   try {
@@ -72,6 +85,11 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
       $set: { ...fields, updatedBy, updatedAt }, $inc: { revision: 1 },
       $push: { audit: { $each: [{ updatedBy, updatedAt, changes }], $position: 0, $slice: 50 } },
     }, { upsert: !doc });
+    if (!rule) logQuotaPolicy('db.write_result', {
+      acknowledged: result.acknowledged, matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount, upsertedCount: result.upsertedCount,
+      changedFields: changes.map(({ field }) => field),
+    });
     if (!result.matchedCount && !result.upsertedCount) throw conflict();
   } catch (error) {
     if (error.code === 11000) throw conflict();

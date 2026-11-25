@@ -13,6 +13,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createAdminUsersRouter } from "./routes/adminUsers.js";
 import { createAdminWebAuth } from "./routes/adminWebAuth.js";
 import { createQuotaPolicyRouter } from "./routes/quotaPolicy.js";
+import { logQuotaPolicy } from "./services/quotaPolicy.js";
 import { createPlayProRouter } from "./routes/playPro.js";
 import { playProConfig } from "./services/playPro.js";
 
@@ -86,4 +87,5 @@ try {
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, "0.0.0.0", () => {
   console.log(`Server chay tai cong ${port}`);
+  logQuotaPolicy('startup', { port, db: mongoose.connection.name, readPreference: mongoose.connection.getClient().options.readPreference?.mode });
 });
