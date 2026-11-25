@@ -4,6 +4,7 @@ export const QuotaPolicy = mongoose.model('QuotaPolicy', new mongoose.Schema({
   _id: String,
   guestLimit: Number,
   freeLimit: Number,
+  sharedAiModelId: String,
   updatedBy: String,
   updatedAt: Date,
   revision: Number,
@@ -22,6 +23,7 @@ export async function readQuotaPolicy() {
   return {
     guestLimit: policy?.guestLimit ?? 3,
     freeLimit: policy?.freeLimit ?? defaultFreeLimit(),
+    sharedAiModelId: policy?.sharedAiModelId ?? null,
     updatedBy: policy?.updatedBy ?? null,
     updatedAt: policy?.updatedAt ?? null,
     revision: policy?.revision ?? 0,
@@ -51,6 +53,7 @@ export async function saveQuotaPolicy({ revision, updatedBy, updatedAt, rule, bo
   const doc = await QuotaPolicy.findById(policyId, { audit: 0 });
   const current = {
     guestLimit: doc?.guestLimit ?? 3, freeLimit: doc?.freeLimit ?? defaultFreeLimit(),
+    sharedAiModelId: doc?.sharedAiModelId ?? null,
     revision: doc?.revision ?? 0, updatedBy: doc?.updatedBy ?? null, updatedAt: doc?.updatedAt ?? null,
   };
   const conflict = () => Object.assign(new Error('Chính sách đã thay đổi. Hãy tải lại trước khi lưu.'), { status: 409 });

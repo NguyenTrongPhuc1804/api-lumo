@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
+import { AiModel } from '../models/AiModel.js';
 import { bonusRuleKeys, readBonusRules, readPolicyAudit, readQuotaPolicy, saveQuotaPolicy } from '../services/quotaPolicy.js';
 
 import { readAiUsage } from '../services/aiUsage.js';
@@ -18,14 +20,22 @@ export function createQuotaPolicyRouter({ authorize, read = readQuotaPolicy, sav
   });
   router.put('/quota-policy', authorize, async (req, res) => {
     if (req.adminWeb.role !== 'owner') return res.sendStatus(403);
-    const { guestLimit, freeLimit, revision } = req.body ?? {};
+    const { guestLimit, freeLimit, revision, sharedAiModelId } = req.body ?? {};
     if (!validRevision(revision)) return res.status(400).json({ error: 'Cần tải phiên bản chính sách trước khi lưu' });
     if (!Number.isInteger(guestLimit) || guestLimit < 0 || guestLimit > 100 ||
         !Number.isInteger(freeLimit) || freeLimit < 1 || freeLimit > 10000) {
       return res.status(400).json({ error: 'Lượt thử phải từ 0 đến 100; lượt Free phải từ 1 đến 10.000' });
     }
+    if (sharedAiModelId != null && (typeof sharedAiModelId !== 'string' || !mongoose.isObjectIdOrHexString(sharedAiModelId))) {
+      return res.status(400).json({ error: 'Model AI cho Free và Guest không hợp lệ' });
+    }
     try {
-      res.json(await save({ guestLimit, freeLimit, revision, updatedBy: req.adminWeb.username, updatedAt: new Date() }));
+      if (sharedAiModelId && !(await AiModel.exists({ _id: sharedAiModelId, enabled: true, $or: [{ coinPrice: 0 }, { coinPrice: { $exists: false } }] }))) {
+        return res.status(400).json({ error: 'Hãy chọn model đang bật và không tính xu' });
+      }
+      res.json(await save({ guestLimit, freeLimit, revision,
+        ...(sharedAiModelId !== undefined && { sharedAiModelId: sharedAiModelId?.toLowerCase() ?? null }),
+        updatedBy: req.adminWeb.username, updatedAt: new Date() }));
     } catch (error) {
       if (error.status === 409) return res.status(409).json({ error: error.message });
       res.status(503).json({ error: 'Không lưu được chính sách hạn mức' });

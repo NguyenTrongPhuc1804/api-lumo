@@ -25,7 +25,7 @@ export async function startGuestTrial(installId) {
   return { token: signGuestToken(key), remaining: Math.max(0, guestLimit - (usage?.used ?? 0)), freeLimit };
 }
 
-export async function chargeGuestTrial(key, requestId) {
+export async function chargeGuestTrial(key, requestId, reportReplay = false) {
   const { guestLimit } = await readQuotaPolicy();
   if (guestLimit === 0) return null;
   await GuestTrial.updateOne({ _id: key }, { $setOnInsert: { used: 0 } }, { upsert: true }).catch((error) => {
@@ -34,12 +34,17 @@ export async function chargeGuestTrial(key, requestId) {
   const filter = { _id: key, used: { $lt: guestLimit }, ...(requestId && { basicRequests: { $ne: requestId } }) };
   const update = { $inc: { used: 1 }, ...(requestId && { $push: { basicRequests: requestId } }) };
   const row = await GuestTrial.findOneAndUpdate(filter, update, { new: true });
-  if (row) return guestLimit - row.used;
+  if (row) return reportReplay ? { remaining: guestLimit - row.used, replay: false } : guestLimit - row.used;
   if (!requestId) return null;
   const previous = await GuestTrial.findById(key);
-  return previous?.basicRequests?.includes(requestId) ? Math.max(0, guestLimit - previous.used) : null;
+  if (!previous?.basicRequests?.includes(requestId)) return null;
+  const remaining = Math.max(0, guestLimit - previous.used);
+  return reportReplay ? { remaining, replay: true } : remaining;
 }
 
-export async function refundGuestTrial(key) {
-  await GuestTrial.updateOne({ _id: key, used: { $gt: 0 } }, { $inc: { used: -1 } });
+export async function refundGuestTrial(key, requestId) {
+  await GuestTrial.updateOne(
+    { _id: key, used: { $gt: 0 }, ...(requestId && { basicRequests: requestId }) },
+    { $inc: { used: -1 }, ...(requestId && { $pull: { basicRequests: requestId } }) },
+  );
 }

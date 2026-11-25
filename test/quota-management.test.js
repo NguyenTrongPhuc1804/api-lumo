@@ -3,6 +3,28 @@ import { test } from 'node:test';
 import { startTestServer } from './helpers/test-app.js';
 import { createQuotaPolicyRouter } from '../src/routes/quotaPolicy.js';
 import { QuotaPolicy } from '../src/services/quotaPolicy.js';
+import { AiModel } from '../src/models/AiModel.js';
+
+test('chỉ Owner được chọn một model đang bật và không tính xu cho Guest/Free', async (t) => {
+  const id = 'abc123abc123abc123abc123';
+  t.mock.method(AiModel, 'exists', async (filter) => filter._id === id && filter.enabled === true && filter.$or?.[0].coinPrice === 0 ? { _id: id } : null);
+  const app = createQuotaPolicyRouter({
+    authorize(req, _res, next) { req.adminWeb = { role: req.get('role'), username: 'owner-test' }; next(); },
+    save: async (fields) => fields,
+  });
+  const server = await startTestServer(app);
+  const save = (role, sharedAiModelId) => fetch(`${server.baseUrl}/api/quota-policy`, {
+    method: 'PUT', headers: { role, 'content-type': 'application/json' },
+    body: JSON.stringify({ guestLimit: 3, freeLimit: 100, revision: 0, sharedAiModelId }),
+  });
+  try {
+    assert.equal((await save('admin', id)).status, 403);
+    assert.equal((await save('owner', [id])).status, 400);
+    assert.equal((await save('owner', '000000000000000000000000')).status, 400);
+    assert.equal((await (await save('owner', id)).json()).sharedAiModelId, id);
+    assert.equal((await (await save('owner', null)).json()).sharedAiModelId, null);
+  } finally { await server.close(); }
+});
 import { AiUsage, readAiUsage, recordAiCall } from '../src/services/aiUsage.js';
 
 test('thống kê dùng 24 khung giờ UTC và tính tỷ trọng theo lượt gọi', async (t) => {

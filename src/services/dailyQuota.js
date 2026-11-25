@@ -24,7 +24,7 @@ export async function readDailyUsage(user, now) {
   return { usageDate, usageCount: row?.usageCount ?? 0 };
 }
 
-export async function chargeDailyUsage(user, limit, cost = 1, now, requestId) {
+export async function chargeDailyUsage(user, limit, cost = 1, now, requestId, reportReplay = false) {
   const { usageDate, expiresAt } = quotaPeriod(now);
   const key = { identityKey: quotaIdentity(user), usageDate };
   if (!Number.isSafeInteger(cost) || cost < 1) throw new Error("So luot tru khong hop le");
@@ -44,16 +44,16 @@ export async function chargeDailyUsage(user, limit, cost = 1, now, requestId) {
   if (row) return { ok: true, remaining: limit - row.usageCount, usageDate, ...(requestId && { expiresAt }) };
   if (requestId) {
     const previous = await DailyQuota.findOne({ ...key, basicRequests: { $elemMatch: { id: requestId, cost } } });
-    if (previous) return { ok: true, remaining: Math.max(0, limit - previous.usageCount), usageDate, ...(requestId && { expiresAt }) };
+    if (previous) return { ok: true, remaining: Math.max(0, limit - previous.usageCount), usageDate, expiresAt, ...(reportReplay && { replay: true }) };
   }
   return { ok: false, remaining: 0, usageDate };
 }
 
-export async function refundDailyUsage(user, usageDate, cost = 1) {
+export async function refundDailyUsage(user, usageDate, cost = 1, requestId) {
   if (!usageDate) return;
   if (!Number.isSafeInteger(cost) || cost < 1) throw new Error("So luot hoan khong hop le");
   await DailyQuota.updateOne(
-    { identityKey: quotaIdentity(user), usageDate, usageCount: { $gte: cost }, expiresAt: { $gt: new Date() } },
-    { $inc: { usageCount: -cost } }
+    { identityKey: quotaIdentity(user), usageDate, usageCount: { $gte: cost }, expiresAt: { $gt: new Date() }, ...(requestId && { 'basicRequests.id': requestId }) },
+    { $inc: { usageCount: -cost }, ...(requestId && { $pull: { basicRequests: { id: requestId } } }) }
   );
 }

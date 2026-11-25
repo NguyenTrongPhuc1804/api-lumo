@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
 import { requireAppKey, requireAdminUser } from "../middleware/auth.js";
 import { verifyModel } from "../services/gemini.js";
+import { readQuotaPolicy } from "../services/quotaPolicy.js";
 
 const router = Router();
 
@@ -58,7 +59,11 @@ router.get("/models", requireAppKey, async (req, res) => {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
   const list = await AiModel.find({ enabled: true }).sort({ order: 1, createdAt: 1 }).lean();
-  res.json(list.map((doc) => toClient(doc, false)));
+  const { sharedAiModelId } = list.length ? await readQuotaPolicy() : {};
+  res.json(list.map((doc) => ({
+    ...toClient(doc, false),
+    ...(sharedAiModelId && String(doc._id) === sharedAiModelId && (doc.coinPrice ?? 0) === 0 && { sharedAi: true }),
+  })));
 });
 
 const verificationError = "Kiểm tra model thất bại. Vui lòng kiểm tra cấu hình kết nối.";

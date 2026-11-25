@@ -6,7 +6,7 @@ import { Translation } from "../models/Translation.js";
 import { translateBatch } from "../services/gemini.js";
 import { requireUser } from "../middleware/auth.js";
 import { consumeQuota, limitFor, refundQuota } from "../services/quota.js";
-import { chargeDailyUsage, quotaIdentity, readDailyUsage } from "../services/dailyQuota.js";
+import { chargeDailyUsage, quotaIdentity, readDailyUsage, refundDailyUsage } from "../services/dailyQuota.js";
 import { rateLimit } from "express-rate-limit";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
 import { chargeGuestTrial, readGuestToken, refundGuestTrial, startGuestTrial } from "../services/guestTrial.js";
@@ -103,6 +103,7 @@ router.post("/guest/translate", guestRate(20), requireGuest, (req, res) => {
 });
 // Legacy endpoints remain available during rollout. Set REQUIRE_PAID_AI=true after upgrading clients.
 router.post('/ai-translation', requireUser, (req, res) => translate(req, res, true));
+router.post('/guest/ai-translation', guestRate(20), requireGuest, (req, res) => translate(req, res, true));
 router.post("/translate", requireUser, (req, res) => {
   if (process.env.REQUIRE_PAID_AI === 'true') return res.status(403).json({ code: 'UPDATE_REQUIRED' });
   return translate(req, res);
@@ -142,12 +143,16 @@ async function translate(req, res, paidOnly = false) {
   let modelConfig;
   let coinDebit;
   let chargedDate;
+  let sharedRequestId;
+  let replay = false;
   try {
     const now = new Date();
-    const pro = paidOnly && Boolean(await verifiedProExpiry(req.user, now));
-    const limit = guest || isAdmin ? 0 : limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
+    const pro = paidOnly && !guest && !isAdmin && Boolean(await verifiedProExpiry(req.user, now));
+    if (paidOnly && !pro && !isAdmin && !model) return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+    const policy = (paidOnly && !pro && !isAdmin) || (!guest && !isAdmin && !(req.user.dailyLimit > 0)) ? await readQuotaPolicy() : null;
+    const limit = guest || isAdmin ? 0 : limitFor(req.user, policy?.freeLimit);
     let remaining = limit;
-    if (guest) {
+    if (guest && !paidOnly) {
       remaining = await chargeGuestTrial(req.guestKey);
       if (remaining === null) return res.status(429).json({ code: "TRIAL_EXHAUSTED", error: "Đã hết lượt dùng thử", remaining: 0 });
       guestCharged = true;
@@ -159,8 +164,33 @@ async function translate(req, res, paidOnly = false) {
       if (!modelConfig) return res.status(400).json({ error: "Model không tồn tại hoặc đang tắt" });
     }
     const coinPrice = modelConfig?.coinPrice ?? 0;
-    if (paidOnly && !pro && !isAdmin && (mode === 'manga' || req.body.automatic === true || coinPrice === 0)) {
-      return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+    if (paidOnly && !pro && !isAdmin) {
+      const sharedModel = modelConfig && policy?.sharedAiModelId === String(modelConfig._id) && coinPrice === 0;
+      if (mode !== 'game' || (req.body.automatic !== undefined && req.body.automatic !== false) ||
+          (guest ? !sharedModel : coinPrice === 0 && !sharedModel)) {
+        return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+      }
+      if (sharedModel) {
+        const requestId = basicRequestId({ body: { requestId: req.body.requestId } });
+        if (!requestId) return res.status(400).json({ code: 'INVALID_REQUEST' });
+        // Bind the ID to the exact request; replay must not buy a different translation.
+        const fingerprint = createHash('sha256').update(JSON.stringify([model, sourceLang, targetLang, texts])).digest('hex');
+        const usageId = `ai:${requestId}:${fingerprint}`;
+        if (guest) {
+          const trial = await chargeGuestTrial(req.guestKey, usageId, true);
+          if (!trial) return res.status(429).json({ code: 'TRIAL_EXHAUSTED', remaining: 0 });
+          replay = trial.replay;
+          remaining = trial.remaining;
+          guestCharged = !replay;
+        } else {
+          const quota = await chargeDailyUsage(req.user, limit, 1, now, usageId, true);
+          if (!quota.ok) return res.status(429).json({ code: 'DAILY_LIMIT', remaining: 0 });
+          replay = quota.replay === true;
+          remaining = quota.remaining;
+          if (!replay) chargedDate = quota.usageDate;
+        }
+        sharedRequestId = usageId;
+      }
     }
     if (coinPrice > 0 && (guest || !coinPaymentsEnabled())) {
       return res.status(503).json({ code: 'COIN_PAYMENTS_DISABLED', error: 'Model trả xu chưa khả dụng' });
@@ -181,12 +211,15 @@ async function translate(req, res, paidOnly = false) {
     // 3. Chi dich nhung cau chua co, bo cau trung nhau
     const missing = mode === 'manga' ? texts : [...new Set(texts.filter((t) => !resultByText.has(t)))];
 
+    if (replay && missing.length > 0) {
+      return res.status(409).json({ code: 'AI_REQUEST_ALREADY_USED' });
+    }
     if (missing.length > 0) {
-      // Chỉ trừ lượt hoặc xu khi phải gọi AI.
+      // Với model trả xu và luồng cũ, chỉ trừ khi phải gọi AI.
       if (!guest && coinPrice > 0) {
         coinDebit = await debitCoins(req.user, coinPrice);
         if (!coinDebit) return res.status(429).json({ code: 'INSUFFICIENT_COINS', error: 'Không đủ xu để dùng model này' });
-      } else if (!isAdmin && !guest) {
+      } else if (!isAdmin && !guest && !sharedRequestId) {
         const quota = await consumeQuota(req.user, 1, limit);
         if (!quota.ok) return res.status(429).json({ error: "Hết lượt dịch hôm nay", remaining: 0 });
         remaining = quota.remaining;
@@ -198,7 +231,7 @@ async function translate(req, res, paidOnly = false) {
         translated = await translateBatch(missing, sourceLang, targetLang, model, { mode, context, usageGroup, modelConfig });
       } catch (err) {
         if (coinDebit) await refundCoins(coinDebit.id).catch(() => console.error('Không hoàn được xu:', coinDebit.id));
-        else if (chargedDate) await refundQuota(req.user, chargedDate);
+        else if (chargedDate && !sharedRequestId) await refundQuota(req.user, chargedDate);
         throw err;
       }
       if (mode === 'manga') return res.json({ translations: translated, cached: 0, remaining: isAdmin || coinDebit ? null : remaining, ...(coinDebit && { coinBalance: coinDebit.balance }) });
@@ -218,7 +251,7 @@ async function translate(req, res, paidOnly = false) {
       }
     }
 
-    if (!isAdmin && !guest && missing.length === 0) {
+    if (!isAdmin && !guest && !sharedRequestId && missing.length === 0) {
       const usage = await readDailyUsage(req.user);
       remaining = Math.max(0, limit - usage.usageCount);
     }
@@ -226,7 +259,10 @@ async function translate(req, res, paidOnly = false) {
     // 5. Tra ket qua dung thu tu cua request
     res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin || coinDebit ? null : remaining, ...(coinDebit && { coinBalance: coinDebit.balance }) });
   } catch (err) {
-    if (guestCharged) await refundGuestTrial(req.guestKey).catch(() => console.warn("Không hoàn được lượt khách"));
+    if (guestCharged) await refundGuestTrial(req.guestKey, sharedRequestId).catch(() => console.warn("Không hoàn được lượt khách"));
+    else if (sharedRequestId && chargedDate) {
+      await refundDailyUsage(req.user, chargedDate, 1, sharedRequestId).catch(() => console.warn('Không hoàn được lượt Free'));
+    }
     console.error("Dich loi:", err.message);
     res.status(502).json({ error: "Khong dich duoc, thu lai sau" });
   }

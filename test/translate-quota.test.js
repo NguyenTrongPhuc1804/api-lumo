@@ -30,6 +30,22 @@ test('model trả xu mặc định không gọi AI và không trừ lượt Free
   assert.equal(state.quota, undefined);
 });
 
+test('Free chỉ được dịch thủ công bằng model Admin chọn và dùng chung hạn mức ML Kit', async () => {
+  const state = { user: freeUser(), sharedAiModel: 'test', modelCalls: 0 };
+  const body = { texts: ['Hello'], requestId: 'cddc48ce-7c0d-4c1d-a6d6-6b9860375c32' };
+  assert.equal((await callTranslate({ body: { ...body, automatic: true }, state, path: 'ai-translation' })).status, 403);
+  assert.equal((await callTranslate({ body: { ...body, model: 'other' }, state, path: 'ai-translation' })).status, 403);
+  assert.equal((await callTranslate({ body, state, path: 'ai-translation' })).status, 200);
+  assert.equal(state.modelCalls, 1);
+  assert.equal(state.quota.usageCount, 1);
+  state.cached = { text: 'Hello', translated: 'Xin chào' };
+  assert.equal((await callTranslate({ body, state, path: 'ai-translation' })).status, 200);
+  assert.equal((await callTranslate({ body: { ...body, requestId: '4fe0314e-357e-4f07-ad84-07fa30460368' }, state, path: 'ai-translation' })).status, 429);
+  assert.equal((await callTranslate({ body: { requestId: body.requestId }, state, path: 'basic-translation' })).status, 429);
+  assert.equal(state.modelCalls, 1);
+  assert.equal(state.quota.usageCount, 1);
+});
+
 const freeUser = () => ({
   provider: "google",
   providerId: "g-free",
@@ -47,13 +63,15 @@ function stubWorld(state) {
     findById: User.findById,
     quota: { findOne: DailyQuota.findOne, findOneAndUpdate: DailyQuota.findOneAndUpdate, updateOne: DailyQuota.updateOne },
     modelFindOne: AiModel.findOne,
+    policyFindById: QuotaPolicy.findById,
     translationFind: Translation.find,
     bulkWrite: Translation.bulkWrite,
     readyState: mongoose.connection.readyState,
     fetch: globalThis.fetch,
   };
   User.findById = async (id) => (id === state.user._id ? state.user : null);
-  AiModel.findOne = () => ({ lean: async () => ({ code: "test", baseUrl: "https://model.test", apiKey: "secret", coinPrice: state.coinPrice }) });
+  QuotaPolicy.findById = async () => state.sharedAiModel ? { sharedAiModelId: state.sharedAiModel } : null;
+  AiModel.findOne = ({ code }) => ({ lean: async () => ({ _id: code, code, enabled: true, baseUrl: "https://model.test", apiKey: "secret", coinPrice: state.coinPrice }) });
   Translation.find = async ({ key }) => {
     if (!state.cached) return [];
     // find duoc goi voi { key: { $in: [...] } }, khong phai mang truc tiep.
@@ -64,7 +82,11 @@ function stubWorld(state) {
 
   mongoose.connection.readyState = 1;
 
-  DailyQuota.findOne = async () => state.quota;
+  DailyQuota.findOne = async (filter) => {
+    const request = filter.basicRequests?.$elemMatch;
+    if (request && !state.quota?.basicRequests?.some(({ id, cost }) => id === request.id && cost === request.cost)) return null;
+    return state.quota;
+  };
   DailyQuota.updateOne = async (filter, update) => {
     if (state.quotaFails) throw new Error("quota database down");
     if (update.$setOnInsert) state.quota ??= { ...update.$setOnInsert };
@@ -72,6 +94,9 @@ function stubWorld(state) {
   };
   DailyQuota.findOneAndUpdate = async (filter, update) => {
     if (!state.quota || state.quota.usageCount > filter.usageCount.$lte) return null;
+    const request = update.$push?.basicRequests;
+    if (request && state.quota.basicRequests?.some(({ id }) => id === request.id)) return null;
+    if (request) (state.quota.basicRequests ??= []).push(request);
     state.quota.usageCount += update.$inc.usageCount;
     return state.quota;
   };
@@ -90,6 +115,7 @@ function stubWorld(state) {
     User.findById = previous.findById;
     Object.assign(DailyQuota, previous.quota);
     AiModel.findOne = previous.modelFindOne;
+    QuotaPolicy.findById = previous.policyFindById;
     Translation.find = previous.translationFind;
     Translation.bulkWrite = previous.bulkWrite;
     mongoose.connection.readyState = previous.readyState;
@@ -97,7 +123,7 @@ function stubWorld(state) {
   };
 }
 
-async function callTranslate({ body, state }) {
+async function callTranslate({ body, state, path = 'translate' }) {
   const restore = stubWorld(state);
   const app = express();
   app.use(express.json());
@@ -105,10 +131,10 @@ async function callTranslate({ body, state }) {
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   try {
-    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/translate`, {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${signToken(state.user._id)}` },
-      body: JSON.stringify({ targetLang: "vi", model: "test", ...body }),
+      body: JSON.stringify(path === 'basic-translation' ? body : { targetLang: "vi", model: "test", ...body }),
     });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   } finally {
