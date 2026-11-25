@@ -5,6 +5,7 @@ const dailyQuotaSchema = new mongoose.Schema({
   usageDate: { type: String, required: true },
   usageCount: { type: Number, min: 0, default: 0 },
   expiresAt: { type: Date, required: true },
+  basicRequests: [{ _id: false, id: String, cost: Number }],
 });
 
 dailyQuotaSchema.index({ identityKey: 1, usageDate: 1 }, { unique: true });

@@ -6,6 +6,7 @@ import { readQuotaPolicy } from './quotaPolicy.js';
 export const GuestTrial = mongoose.model('GuestTrial', new mongoose.Schema({
   _id: String,
   used: Number,
+  basicRequests: [String],
 }));
 
 export function signGuestToken(key) {
@@ -24,14 +25,19 @@ export async function startGuestTrial(installId) {
   return { token: signGuestToken(key), remaining: Math.max(0, guestLimit - (usage?.used ?? 0)), freeLimit };
 }
 
-export async function chargeGuestTrial(key) {
+export async function chargeGuestTrial(key, requestId) {
   const { guestLimit } = await readQuotaPolicy();
   if (guestLimit === 0) return null;
   await GuestTrial.updateOne({ _id: key }, { $setOnInsert: { used: 0 } }, { upsert: true }).catch((error) => {
     if (error.code !== 11000) throw error;
   });
-  const row = await GuestTrial.findOneAndUpdate({ _id: key, used: { $lt: guestLimit } }, { $inc: { used: 1 } }, { new: true });
-  return row ? guestLimit - row.used : null;
+  const filter = { _id: key, used: { $lt: guestLimit }, ...(requestId && { basicRequests: { $ne: requestId } }) };
+  const update = { $inc: { used: 1 }, ...(requestId && { $push: { basicRequests: requestId } }) };
+  const row = await GuestTrial.findOneAndUpdate(filter, update, { new: true });
+  if (row) return guestLimit - row.used;
+  if (!requestId) return null;
+  const previous = await GuestTrial.findById(key);
+  return previous?.basicRequests?.includes(requestId) ? Math.max(0, guestLimit - previous.used) : null;
 }
 
 export async function refundGuestTrial(key) {

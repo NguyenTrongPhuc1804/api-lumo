@@ -6,12 +6,12 @@ import { Translation } from "../models/Translation.js";
 import { translateBatch } from "../services/gemini.js";
 import { requireUser } from "../middleware/auth.js";
 import { consumeQuota, limitFor, refundQuota } from "../services/quota.js";
-import { readDailyUsage } from "../services/dailyQuota.js";
+import { chargeDailyUsage, quotaIdentity, readDailyUsage } from "../services/dailyQuota.js";
 import { rateLimit } from "express-rate-limit";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
 import { chargeGuestTrial, readGuestToken, refundGuestTrial, startGuestTrial } from "../services/guestTrial.js";
 
-import { coinPaymentsEnabled, debitCoins, refundCoins } from '../services/coinWallet.js';
+import { CoinWallet, coinPaymentsEnabled, debitCoins, proExpiresAt, refundCoins } from '../services/coinWallet.js';
 
 const router = Router();
 
@@ -43,17 +43,72 @@ router.post("/guest/session", guestRate(12), async (req, res) => {
   }
 });
 
-router.post("/guest/translate", guestRate(20), (req, res, next) => {
+function requireGuest(req, res, next) {
   try {
     req.guestKey = readGuestToken((req.get("authorization") ?? "").replace(/^Bearer /, ""));
   } catch {
     return res.status(401).json({ error: "Phiên dùng thử đã hết hạn" });
   }
   next();
-}, translate);
-router.post("/translate", requireUser, translate);
+}
 
-async function translate(req, res) {
+function basicRequestId(req) {
+  const { requestId, ...extra } = req.body ?? {};
+  return Object.keys(extra).length === 0 && typeof requestId === 'string' &&
+    /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(requestId) ? requestId : null;
+}
+
+router.post('/guest/basic-translation', guestRate(20), requireGuest, async (req, res) => {
+  const requestId = basicRequestId(req);
+  if (!requestId) return res.status(400).json({ code: 'INVALID_REQUEST' });
+  const remaining = await chargeGuestTrial(req.guestKey, requestId);
+  if (remaining === null) return res.status(429).json({ code: 'TRIAL_EXHAUSTED', remaining: 0 });
+  res.json({ remaining });
+});
+async function verifiedProExpiry(user, now) {
+  if (!coinPaymentsEnabled()) return null;
+  return proExpiresAt(await CoinWallet.findById(quotaIdentity(user)), now);
+}
+
+router.post('/basic-translation', requireUser, async (req, res) => {
+  const { automatic = false, ...body } = req.body ?? {};
+  const requestId = typeof automatic === 'boolean' ? basicRequestId({ body }) : null;
+  if (!requestId) return res.status(400).json({ code: 'INVALID_REQUEST' });
+  const now = new Date();
+  const proUntil = await verifiedProExpiry(req.user, now);
+  if (proUntil || (automatic && req.user.role === 'admin')) return res.json({ remaining: null });
+  if (automatic) return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+  const limit = limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
+  const quota = await chargeDailyUsage(req.user, limit, 1, now, requestId);
+  if (!quota.ok) return res.status(429).json({ code: 'DAILY_LIMIT', remaining: 0 });
+  res.json({ remaining: quota.remaining });
+});
+router.post('/basic-translation/offline', requireUser, async (req, res) => {
+  const { count, ...body } = req.body ?? {};
+  const requestId = basicRequestId({ body });
+  if (!requestId || !Number.isInteger(count) || count < 1 || count > 20) {
+    return res.status(400).json({ code: 'INVALID_REQUEST' });
+  }
+  const now = new Date();
+  const proUntil = await verifiedProExpiry(req.user, now);
+  if (proUntil) return res.json({ grantId: requestId, count: null, remaining: null, expiresAt: proUntil, serverTime: now });
+  const limit = limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
+  const quota = await chargeDailyUsage(req.user, limit, count, now, `offline:${requestId}`);
+  if (!quota.ok) return res.status(429).json({ code: 'DAILY_LIMIT', remaining: quota.remaining });
+  res.json({ grantId: `${quota.usageDate}:${requestId}`, count, remaining: quota.remaining, expiresAt: quota.expiresAt, serverTime: now });
+});
+router.post("/guest/translate", guestRate(20), requireGuest, (req, res) => {
+  if (process.env.REQUIRE_PAID_AI === 'true') return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+  return translate(req, res);
+});
+// Legacy endpoints remain available during rollout. Set REQUIRE_PAID_AI=true after upgrading clients.
+router.post('/ai-translation', requireUser, (req, res) => translate(req, res, true));
+router.post("/translate", requireUser, (req, res) => {
+  if (process.env.REQUIRE_PAID_AI === 'true') return res.status(403).json({ code: 'UPDATE_REQUIRED' });
+  return translate(req, res);
+});
+
+async function translate(req, res, paidOnly = false) {
   const { texts, sourceLang = "auto", targetLang, mode = "game", context = [] } = req.body ?? {};
   if (mode !== "game" && mode !== "manga") return res.status(400).json({ error: "Mode khong hop le" });
   if (!Array.isArray(context) || context.length > 3 || context.some(turn =>
@@ -88,6 +143,8 @@ async function translate(req, res) {
   let coinDebit;
   let chargedDate;
   try {
+    const now = new Date();
+    const pro = paidOnly && Boolean(await verifiedProExpiry(req.user, now));
     const limit = guest || isAdmin ? 0 : limitFor(req.user, req.user.dailyLimit > 0 ? undefined : (await readQuotaPolicy()).freeLimit);
     let remaining = limit;
     if (guest) {
@@ -102,6 +159,9 @@ async function translate(req, res) {
       if (!modelConfig) return res.status(400).json({ error: "Model không tồn tại hoặc đang tắt" });
     }
     const coinPrice = modelConfig?.coinPrice ?? 0;
+    if (paidOnly && !pro && !isAdmin && (mode === 'manga' || req.body.automatic === true || coinPrice === 0)) {
+      return res.status(403).json({ code: 'PAID_TRANSLATION_REQUIRED' });
+    }
     if (coinPrice > 0 && (guest || !coinPaymentsEnabled())) {
       return res.status(503).json({ code: 'COIN_PAYMENTS_DISABLED', error: 'Model trả xu chưa khả dụng' });
     }
