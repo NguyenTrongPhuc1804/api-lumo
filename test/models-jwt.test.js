@@ -6,100 +6,50 @@ import modelRouter from "../src/routes/models.js";
 import { signToken } from "../src/services/tokens.js";
 import { AiModel } from "../src/models/AiModel.js";
 import { User } from "../src/models/User.js";
+import { QuotaPolicy } from "../src/services/quotaPolicy.js";
 
-const admin = { _id: "admin-1", role: "admin", status: "active" };
-const normal = { _id: "user-2", role: "user", status: "active" };
-
-function stub() {
-  const previous = { findById: User.findById, modelFind: AiModel.find, readyState: mongoose.connection.readyState };
-  User.findById = async (id) => (String(id) === "admin-1" ? admin : String(id) === "user-2" ? normal : null);
-  AiModel.find = () => ({ sort: () => ({ lean: async () => [] }) });
-  mongoose.connection.readyState = 1;
-  return () => {
-    User.findById = previous.findById;
-    AiModel.find = previous.modelFind;
-    mongoose.connection.readyState = previous.readyState;
-  };
-}
-
-async function serve() {
+async function serve(t) {
   const app = express();
   app.use(express.json());
   app.use("/api", modelRouter);
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
-  return {
-    baseUrl: `http://127.0.0.1:${server.address().port}`,
-    async close() {
-      server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
-    },
-  };
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  return `http://127.0.0.1:${server.address().port}`;
 }
 
-test("x-admin-key không còn dùng được", async () => {
+test("API quản lý model mobile trả 404 ngay cả với token admin", async (t) => {
   process.env.JWT_SECRET = "test-secret";
-  process.env.ADMIN_KEY = "still-set";
-  const restore = stub();
-  const server = await serve();
-  try {
-    const res = await fetch(`${server.baseUrl}/api/admin/models`, { headers: { "x-admin-key": "still-set" } });
-    assert.equal(res.status, 401);
-  } finally {
-    restore();
-    await server.close();
+  t.mock.method(User, "findById", async () => ({ _id: "admin-1", role: "admin", status: "active" }));
+  const baseUrl = await serve(t);
+  const headers = { Authorization: `Bearer ${signToken("admin-1")}` };
+  for (const [method, suffix] of [["GET", ""], ["POST", ""], ["POST", "/verify"], ["PUT", "/id"], ["DELETE", "/id"]]) {
+    const response = await fetch(`${baseUrl}/api/admin/models${suffix}`, { method, headers });
+    assert.equal(response.status, 404, `${method} ${suffix}`);
   }
 });
 
-test("admin JWT đọc được danh sách model", async () => {
-  process.env.JWT_SECRET = "test-secret";
-  const restore = stub();
-  const server = await serve();
-  try {
-    const res = await fetch(`${server.baseUrl}/api/admin/models`, { headers: { Authorization: `Bearer ${signToken("admin-1")}` } });
-    assert.equal(res.status, 200);
-  } finally {
-    restore();
-    await server.close();
-  }
-});
-
-test("user thường bị 403", async () => {
-  process.env.JWT_SECRET = "test-secret";
-  const restore = stub();
-  const server = await serve();
-  try {
-    const res = await fetch(`${server.baseUrl}/api/admin/models`, { headers: { Authorization: `Bearer ${signToken("user-2")}` } });
-    assert.equal(res.status, 403);
-  } finally {
-    restore();
-    await server.close();
-  }
-});
-
-test("GET /api/models vẫn nhận x-app-key và không cần token", async () => {
-  process.env.APP_KEY = "app-key";
-  const restore = stub();
-  const server = await serve();
-  try {
-    const res = await fetch(`${server.baseUrl}/api/models`, { headers: { "x-app-key": "app-key" } });
-    assert.equal(res.status, 200);
-  } finally {
-    restore();
-    await server.close();
-  }
-});
-
-test("GET /api/models không nhận token thay cho x-app-key", async () => {
+test("GET /api/models cần x-app-key và không lộ thông tin kết nối", async (t) => {
   process.env.APP_KEY = "app-key";
   process.env.JWT_SECRET = "test-secret";
-  const restore = stub();
-  const server = await serve();
-  try {
-    const res = await fetch(`${server.baseUrl}/api/models`, { headers: { Authorization: `Bearer ${signToken("admin-1")}` } });
-    assert.equal(res.status, 401);
-  } finally {
-    restore();
-    await server.close();
-  }
+  const readyState = mongoose.connection.readyState;
+  mongoose.connection.readyState = 1;
+  t.after(() => { mongoose.connection.readyState = readyState; });
+  t.mock.method(QuotaPolicy, "findById", async () => null);
+  t.mock.method(AiModel, "find", (query) => {
+    assert.deepEqual(query, { enabled: true });
+    return { sort: () => ({ lean: async () => [{ code: "test", name: "Test", apiKey: "fixture-key", baseUrl: "https://models.test" }] }) };
+  });
+  const baseUrl = await serve(t);
+  const denied = await fetch(`${baseUrl}/api/models`, { headers: { Authorization: `Bearer ${signToken("admin-1")}` } });
+  assert.equal(denied.status, 401);
+  const response = await fetch(`${baseUrl}/api/models`, { headers: { "x-app-key": "app-key" } });
+  assert.equal(response.status, 200);
+  const [model] = await response.json();
+  assert.equal(model.code, "test");
+  assert.equal(Object.hasOwn(model, "apiKey"), false);
+  assert.equal(Object.hasOwn(model, "baseUrl"), false);
 });

@@ -41,7 +41,7 @@ app.use(express.json({ limit: "200kb" }));
 
 // In ra moi request de biet app co goi toi server hay khong
 app.use((req, res, next) => {
-  res.on("finish", () => console.log(`${req.method} ${req.originalUrl} -> ${res.statusCode} (${req.ip})`));
+  res.on("finish", () => console.log(`${req.method} ${req.path} -> ${res.statusCode} (${req.ip})`));
   next();
 });
 
@@ -63,7 +63,7 @@ app.use("/api", createAuthRouter());
 app.use("/api", createAdminUsersRouter());
 app.use("/api/admin-web/auth", adminWeb.router);
 app.use("/api/admin-web", createAdminUsersRouter({ prefix: "", authorize: adminWeb.requireSession }));
-app.use("/api/admin-web", createAdminModelsRouter({ prefix: "", authorize: adminWeb.requireSession, web: true }));
+app.use("/api/admin-web", createAdminModelsRouter(adminWeb.requireSession));
 app.use("/api/admin-web", createQuotaPolicyRouter({ authorize: adminWeb.requireSession }));
 app.use("/api", translateRouter);
 app.use("/api", modelsRouter);

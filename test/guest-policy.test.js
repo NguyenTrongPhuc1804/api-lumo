@@ -6,13 +6,14 @@ import { createQuotaPolicyRouter } from '../src/routes/quotaPolicy.js';
 import { GuestTrial, signGuestToken, readGuestToken } from '../src/services/guestTrial.js';
 import { QuotaPolicy } from '../src/services/quotaPolicy.js';
 import { AiUsage } from '../src/services/aiUsage.js';
-import { verifyModel } from '../src/services/gemini.js';
+import { verifyModel } from '../src/services/aiTranslation.js';
 import { AiModel } from '../src/models/AiModel.js';
 import { Translation } from '../src/models/Translation.js';
 import mongoose from 'mongoose';
 import translateRouter from '../src/routes/translate.js';
 import { verifyToken } from '../src/services/tokens.js';
 
+process.env.AI_PROVIDER_ALLOWED_ORIGINS = 'https://model.test';
 process.env.JWT_SECRET = 'test-guest-key';
 process.env.QUOTA_HMAC_SECRET = 'test-quota-key';
 

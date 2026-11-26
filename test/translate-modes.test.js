@@ -8,6 +8,8 @@ import { Translation } from '../src/models/Translation.js';
 import { User } from '../src/models/User.js';
 import { signToken } from '../src/services/tokens.js';
 
+process.env.AI_PROVIDER_ALLOWED_ORIGINS = 'https://model.test';
+
 // Tai khoan admin de khong bi tru luot trong cac test nay.
 const admin = { _id: 'admin-1', role: 'admin', status: 'active', dailyLimit: 0, usageDate: '', usageCount: 0 };
 

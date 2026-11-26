@@ -14,6 +14,7 @@ import { signToken } from "../src/services/tokens.js";
 // todayKey phai duoc stub de test "sang ngay moi" khong phu thuoc dong ho that.
 process.env.JWT_SECRET = "test-secret";
 process.env.FREE_DAILY_LIMIT = "1";
+process.env.AI_PROVIDER_ALLOWED_ORIGINS = "https://model.test";
 
 const { default: router } = await import("../src/routes/translate.js");
 const { QuotaPolicy } = await import("../src/services/quotaPolicy.js");

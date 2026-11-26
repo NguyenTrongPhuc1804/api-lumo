@@ -4,8 +4,13 @@ import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
 import { recordAiCall } from './aiUsage.js';
 
-const BASE_URL = process.env.REVID_BASE_URL || "https://revidapi.com";
-const API_KEY = process.env.REVID_API_KEY;
+function providerUrl(value) {
+  const url = typeof value === "string" ? URL.parse(value.trim()) : null;
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.href.includes("?") || url.href.includes("#")) {
+    throw new Error("Base URL của nhà cung cấp phải là HTTPS, không chứa thông tin đăng nhập, query hoặc fragment.");
+  }
+  return url;
+}
 
 // Model hay tra ve JSON trong khoi ```json ... ```, ham nay bo khoi do roi parse
 export function parseTranslations(content, expectedCount) {
@@ -37,12 +42,12 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
     "Keep the same order and the same number of items. Keep numbers, names and emoji. " +
     "Return ONLY a JSON array of strings, no explanation.";
 
-  // baseUrl co the dinh ky tu dieu khien khi dan tu clipboard, phai bo truoc khi goi
-  const effectiveBaseUrl = (customBaseUrl || BASE_URL)
-    .replace(/[\u0000-\u001F\u007F]/g, "")
-    .trim()
-    .replace(/\/+$/, "");
-  const effectiveApiKey = (customApiKey || API_KEY).trim();
+  const target = providerUrl(customBaseUrl);
+  const allowedOrigins = (process.env.AI_PROVIDER_ALLOWED_ORIGINS ?? "").split(",").map((origin) => origin.trim());
+  if (!allowedOrigins.includes(target.origin)) throw new Error("Origin của nhà cung cấp chưa được cho phép.");
+  const modelKey = typeof customApiKey === "string" ? customApiKey.trim() : "";
+  if (!modelKey) throw new Error("Chưa cấu hình API key cho model.");
+  const effectiveBaseUrl = target.href.replace(/\/+$/, "");
 
   // Ho tro ca endpoint da co hoac chua co /v1
   const endpoint = effectiveBaseUrl.endsWith("/v1")
@@ -68,19 +73,15 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${effectiveApiKey}`,
+      Authorization: `Bearer ${modelKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(30000),
-    ...(opts.webVerification && { redirect: "error" }),
+    redirect: "error",
   });
 
-  if (!res.ok) {
-    if (opts.webVerification) throw new Error("Kiem tra model that bai");
-    const errorBody = await res.text().catch(() => "");
-    throw new Error(`API tra ve ${res.status}: ${errorBody.slice(0, 600)}`);
-  }
+  if (!res.ok) throw new Error(`API tra ve HTTP ${res.status}`);
 
   const json = await res.json();
   const content = json.choices?.[0]?.message?.content;
@@ -92,11 +93,10 @@ async function callModel(model, texts, sourceLang, targetLang, customBaseUrl, cu
 
 // Goi thu 1 tu de kiem tra model co hoat dong khong truoc khi luu vao DB.
 // Dung max_tokens nho cho nhanh va re, khong gui temperature de model nao cung nhan.
-export async function verifyModel(model, customBaseUrl, customApiKey, webVerification = false) {
+export async function verifyModel(model, customBaseUrl, customApiKey) {
   return await callModel(model, ["Hello"], "en", "vi", customBaseUrl, customApiKey, {
     maxTokens: 1024,
     temperature: null,
-    webVerification,
   });
 }
 

@@ -3,7 +3,7 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
 import { Translation } from "../models/Translation.js";
-import { translateBatch } from "../services/gemini.js";
+import { translateBatch } from "../services/aiTranslation.js";
 import { requireUser } from "../middleware/auth.js";
 import { consumeQuota, limitFor, refundQuota } from "../services/quota.js";
 import { chargeDailyUsage, quotaIdentity, readDailyUsage, refundDailyUsage } from "../services/dailyQuota.js";
@@ -247,7 +247,7 @@ async function translate(req, res, paidOnly = false) {
             upsert: true,
           },
         }));
-        await Translation.bulkWrite(operations).catch((err) => console.warn("Luu cache loi:", err.message));
+        await Translation.bulkWrite(operations).catch(() => console.warn("TRANSLATION_CACHE_WRITE_FAILED"));
       }
     }
 
@@ -258,12 +258,12 @@ async function translate(req, res, paidOnly = false) {
 
     // 5. Tra ket qua dung thu tu cua request
     res.json({ translations: texts.map((t) => resultByText.get(t)), cached: cachedCount, remaining: isAdmin || coinDebit ? null : remaining, ...(coinDebit && { coinBalance: coinDebit.balance }) });
-  } catch (err) {
+  } catch {
     if (guestCharged) await refundGuestTrial(req.guestKey, sharedRequestId).catch(() => console.warn("Không hoàn được lượt khách"));
     else if (sharedRequestId && chargedDate) {
       await refundDailyUsage(req.user, chargedDate, 1, sharedRequestId).catch(() => console.warn('Không hoàn được lượt Free'));
     }
-    console.error("Dich loi:", err.message);
+    console.error("TRANSLATION_FAILED");
     res.status(502).json({ error: "Khong dich duoc, thu lai sau" });
   }
 }

@@ -1,8 +1,8 @@
 import { Router } from "express";
 import mongoose from "mongoose";
 import { AiModel } from "../models/AiModel.js";
-import { requireAppKey, requireAdminUser } from "../middleware/auth.js";
-import { verifyModel } from "../services/gemini.js";
+import { requireAppKey } from "../middleware/auth.js";
+import { verifyModel } from "../services/aiTranslation.js";
 import { readQuotaPolicy } from "../services/quotaPolicy.js";
 
 const router = Router();
@@ -71,80 +71,74 @@ const verificationError = "Kiểm tra model thất bại. Vui lòng kiểm tra c
 async function needsNewKey(baseUrl, apiKey, current) {
   const currentUrl = cleanText(current?.baseUrl ?? "");
   const savedKey = cleanText(current?.apiKey ?? "");
-  if (!apiKey) return baseUrl !== currentUrl || (Boolean(baseUrl) && !savedKey);
+  if (!apiKey) return Boolean(savedKey) && baseUrl !== currentUrl;
   if (apiKey === maskKey(savedKey) || (baseUrl !== currentUrl && apiKey === savedKey)) return true;
 
   // Không cho dùng lại khóa đã cấu hình ở một endpoint khác.
-  const defaultUrl = cleanText(process.env.REVID_BASE_URL || "https://revidapi.com");
-  const endpoint = (value) => (cleanText(value ?? "") || defaultUrl).replace(/\/+$/, "").replace(/\/v1$/, "");
-  if (apiKey === (process.env.REVID_API_KEY ?? "").trim() && endpoint(baseUrl) !== endpoint(defaultUrl)) return true;
+  const endpoint = (value) => cleanText(value ?? "").replace(/\/+$/, "").replace(/\/v1$/, "");
   const savedUrls = await AiModel.distinct("baseUrl", { apiKey });
   return savedUrls.some((url) => endpoint(url) !== endpoint(baseUrl));
 }
 
 const newKeyError = "Cần nhập API key mới phù hợp với Base URL.";
 
-async function listModels(req, res, web) {
+async function listModels(req, res) {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
   const list = await AiModel.find().sort({ order: 1, createdAt: 1 }).lean();
   res.json(list.map((doc) => {
-    if (!web) return toClient(doc, true);
     const { baseUrl = "", enabled = true, order = 0 } = doc;
     return toClient({ ...doc, baseUrl, enabled, order }, req.adminWeb.role === "owner", true);
   }));
 }
 
 // Kiểm tra kết nối mà không lưu model.
-async function verifyModelRoute(req, res, web) {
+async function verifyModelRoute(req, res) {
   const { id, model, baseUrl, apiKey } = req.body ?? {};
   if (!model || typeof model !== "string" || !model.trim()) {
     return res.status(400).json({ ok: false, error: "Thieu ma model" });
   }
 
-  let targetUrl = baseUrl;
-  let key = apiKey;
-  if (web) {
-    if (id !== undefined && !mongoose.isObjectIdOrHexString(id)) {
-      return res.status(400).json({ ok: false, error: "ID model không hợp lệ" });
-    }
-    if (baseUrl !== undefined && typeof baseUrl !== "string") {
-      return res.status(400).json({ ok: false, error: "Base URL không hợp lệ" });
-    }
-    const current = id ? await AiModel.findById(id).select("baseUrl apiKey").lean() : null;
-    if (id && !current) return res.status(404).json({ ok: false, error: "Không tìm thấy model" });
-    targetUrl = cleanText(baseUrl ?? current?.baseUrl ?? "");
-    const suppliedKey = typeof apiKey === "string" ? cleanText(apiKey) : "";
-    if (await needsNewKey(targetUrl, suppliedKey, current)) {
-      return res.status(400).json({ ok: false, error: newKeyError });
-    }
-    key = suppliedKey || current?.apiKey;
-  } else if (!key && id) {
-    const doc = await AiModel.findById(id).select("apiKey").lean();
-    key = doc?.apiKey || "";
+  if (id !== undefined && !mongoose.isObjectIdOrHexString(id)) {
+    return res.status(400).json({ ok: false, error: "ID model không hợp lệ" });
+  }
+  if (baseUrl !== undefined && typeof baseUrl !== "string") {
+    return res.status(400).json({ ok: false, error: "Base URL không hợp lệ" });
+  }
+  const current = id ? await AiModel.findById(id).select("baseUrl apiKey").lean() : null;
+  if (id && !current) return res.status(404).json({ ok: false, error: "Không tìm thấy model" });
+  const targetUrl = cleanText(baseUrl ?? current?.baseUrl ?? "");
+  const suppliedKey = typeof apiKey === "string" ? cleanText(apiKey) : "";
+  const targetKey = suppliedKey || cleanText(current?.apiKey ?? "");
+  if (!targetUrl || !targetKey) {
+    return res.status(400).json({ ok: false, error: "Model phải có Base URL và API key." });
+  }
+  if (await needsNewKey(targetUrl, suppliedKey, current)) {
+    return res.status(400).json({ ok: false, error: newKeyError });
   }
 
   try {
-    const sample = await verifyModel(model.trim(), targetUrl, key, web);
-    res.json(web ? { ok: true } : { ok: true, sample });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: web ? verificationError : err.message });
+    const startedAt = performance.now();
+    await verifyModel(model.trim(), targetUrl, targetKey);
+    const latencyMs = Math.round(performance.now() - startedAt);
+    res.json({ ok: true, latencyMs });
+  } catch {
+    res.status(400).json({ ok: false, error: verificationError });
   }
 }
 
-async function createModel(req, res, web) {
+async function createModel(req, res) {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
 
   const fields = readModelFields(req.body ?? {});
-  if (!web && fields.coinPrice !== undefined) return res.status(403).json({ error: 'Chỉ Owner trên web được đặt giá xu' });
-  const { code, name, baseUrl = "", apiKey = "", enabled = true, order = 0 } = web ? fields : { ...req.body, ...fields };
-  if (web && await needsNewKey(baseUrl, apiKey)) return res.status(400).json({ error: newKeyError });
+  const { code, name, baseUrl = "", apiKey = "", enabled = true, order = 0 } = fields;
 
   if (!fields.code) return res.status(400).json({ error: "code khong duoc de trong" });
   if (!fields.name) return res.status(400).json({ error: "name khong duoc de trong" });
+  if (!baseUrl || !apiKey) return res.status(400).json({ error: "Model phải có Base URL và API key." });
 
   const existed = await AiModel.findOne({ code: code.trim() });
   if (existed) {
@@ -152,9 +146,10 @@ async function createModel(req, res, web) {
   }
 
   try {
-    await verifyModel(code.trim(), baseUrl, apiKey, web);
-  } catch (err) {
-    return res.status(400).json({ error: web ? verificationError : `Kiem tra model that bai: ${err.message}` });
+    if (await needsNewKey(baseUrl, apiKey)) return res.status(400).json({ error: newKeyError });
+    await verifyModel(code, baseUrl, apiKey);
+  } catch {
+    return res.status(400).json({ error: verificationError });
   }
 
   const created = await AiModel.create({
@@ -171,7 +166,7 @@ async function createModel(req, res, web) {
   res.status(201).json({ ok: true, model: toClient(created.toObject(), true) });
 }
 
-async function updateModel(req, res, web) {
+async function updateModel(req, res) {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: "Database chua ket noi" });
   }
@@ -181,8 +176,7 @@ async function updateModel(req, res, web) {
 
   const body = req.body ?? {};
   const fields = readModelFields(body);
-  if (!web && fields.coinPrice !== undefined) return res.status(403).json({ error: 'Chỉ Owner trên web được đặt giá xu' });
-  if (web && Object.hasOwn(body, "baseUrl")) {
+  if (Object.hasOwn(body, "baseUrl")) {
     if (typeof body.baseUrl !== "string") return res.status(400).json({ error: "Base URL không hợp lệ" });
     fields.baseUrl = cleanText(body.baseUrl);
   }
@@ -196,20 +190,27 @@ async function updateModel(req, res, web) {
   const nextApiKey = fields.apiKey ?? current.apiKey;
 
   const shouldVerify = nextBaseUrl !== current.baseUrl || nextApiKey !== current.apiKey || nextCode !== current.code;
-  if (web && (shouldVerify || fields.enabled === true)
+  if ((shouldVerify || fields.enabled === true)
     && await needsNewKey(cleanText(nextBaseUrl ?? ""), fields.apiKey, current)) {
     return res.status(400).json({ error: newKeyError });
   }
-  if (shouldVerify) {
+  if (shouldVerify || (fields.enabled === true && !current.enabled)) {
     try {
-      await verifyModel(nextCode, nextBaseUrl, nextApiKey, web);
-    } catch (err) {
-      return res.status(400).json({ error: web ? verificationError : `Kiem tra model that bai: ${err.message}` });
+      await verifyModel(nextCode, nextBaseUrl, nextApiKey);
+    } catch {
+      return res.status(400).json({ error: verificationError });
     }
   }
 
   Object.assign(current, fields);
-  await current.save();
+  try {
+    await current.save();
+  } catch (error) {
+    if (error instanceof mongoose.Error.VersionError) {
+      return res.status(409).json({ error: "Model đã thay đổi. Vui lòng tải lại và thử lại." });
+    }
+    throw error;
+  }
 
   res.json({ ok: true, model: toClient(current.toObject(), true) });
 }
@@ -227,22 +228,22 @@ async function deleteModel(req, res) {
   res.json({ ok: true });
 }
 
-export function createAdminModelsRouter({ prefix = "/admin", authorize = requireAdminUser, web = false } = {}) {
+export function createAdminModelsRouter(authorize) {
   const adminRouter = Router();
-  const modelsPath = `${prefix}/models`;
-  const canRead = web ? [authorize, (req, res, next) => {
+  const modelsPath = "/models";
+  const canRead = [authorize, (req, res, next) => {
     if (!["owner", "admin"].includes(req.adminWeb.role)) return res.status(403).json({ error: "Không có quyền xem model" });
     next();
-  }] : authorize;
-  const canWrite = web ? [authorize, (req, res, next) => {
+  }];
+  const canWrite = [authorize, (req, res, next) => {
     if (req.adminWeb.role !== "owner") return res.status(403).json({ error: "Chỉ chủ quản trị được thực hiện thao tác này" });
     next();
-  }] : authorize;
+  }];
 
-  adminRouter.get(modelsPath, canRead, (req, res) => listModels(req, res, web));
-  adminRouter.post(`${modelsPath}/verify`, canWrite, (req, res) => verifyModelRoute(req, res, web));
-  adminRouter.post(modelsPath, canWrite, (req, res) => createModel(req, res, web));
-  adminRouter.put(`${modelsPath}/:id`, canWrite, (req, res) => updateModel(req, res, web));
+  adminRouter.get(modelsPath, canRead, (req, res) => listModels(req, res));
+  adminRouter.post(`${modelsPath}/verify`, canWrite, (req, res) => verifyModelRoute(req, res));
+  adminRouter.post(modelsPath, canWrite, (req, res) => createModel(req, res));
+  adminRouter.put(`${modelsPath}/:id`, canWrite, (req, res) => updateModel(req, res));
   adminRouter.delete(`${modelsPath}/:id`, canWrite, deleteModel);
 
   // Chuyển lỗi validation metadata sang JSON; giữ nguyên xử lý các lỗi khác.
@@ -253,5 +254,4 @@ export function createAdminModelsRouter({ prefix = "/admin", authorize = require
   return adminRouter;
 }
 
-router.use(createAdminModelsRouter());
 export default router;

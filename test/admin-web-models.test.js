@@ -21,6 +21,7 @@ const config = {
 const id = '507f1f77bcf86cd799439011';
 const baseUrl = 'https://models.example';
 const otherUrl = 'https://other-models.example';
+process.env.AI_PROVIDER_ALLOWED_ORIGINS = `${baseUrl},${otherUrl}`;
 const apiKey = 'saved-fixture-key';
 const newKey = 'new-fixture-key';
 
@@ -30,7 +31,7 @@ async function setup(t, rows = []) {
   router.use('/admin-web', auth.cors);
   router.use('/admin-web/auth', auth.router);
   if (models.createAdminModelsRouter) {
-    router.use('/admin-web', models.createAdminModelsRouter({ prefix: '', authorize: auth.requireSession, web: true }));
+    router.use('/admin-web', models.createAdminModelsRouter(auth.requireSession));
   }
   const server = await startTestServer(router);
   t.after(() => server.close());
@@ -55,7 +56,7 @@ async function setup(t, rows = []) {
   t.mock.method(AiModel, 'findById', (value) => {
     const row = rows.find((row) => row._id === value);
     const query = Promise.resolve(row && {
-      ...row, toObject() { return this; }, async save() { Object.assign(row, this.toObject()); },
+      ...row, toObject() { return this; }, async save() { if (row.saveError) throw row.saveError; Object.assign(row, this.toObject()); },
     });
     return Object.assign(query, { select: () => ({ lean: async () => row }) });
   });
@@ -158,6 +159,14 @@ test('web models chỉ cho owner và admin đọc, chỉ owner thấy khóa đã
   assert.equal(upstream.mock.callCount(), 0);
 });
 
+test('cập nhật model trả 409 khi bản ghi đã thay đổi trong lúc chờ xác minh', async (t) => {
+  const saveError = new mongoose.Error.VersionError(new AiModel({ _id: id }), 0, ['apiKey']);
+  const { call, login } = await setup(t, [{ ...fixture, saveError }]);
+  const token = await login('owner');
+  const response = await call(`${path}/${id}`, { token, method: 'PUT', body: { apiKey: newKey } });
+  assert.equal(response.status, 409);
+});
+
 test('owner tạo, sửa, bật tắt, xác thực và xóa model', async (t) => {
   const { call, login, upstream } = await setup(t);
   const token = await login('owner');
@@ -173,7 +182,10 @@ test('owner tạo, sửa, bật tắt, xác thực và xóa model', async (t) =>
   assert.equal((await (await call(path, { token })).json())[0].name, 'Changed');
   const verified = await call(`${path}/verify`, { token, method: 'POST', body: { id, model: 'test', baseUrl } });
   assert.equal(verified.status, 200);
-  assert.deepEqual(await verified.json(), { ok: true });
+  const { latencyMs, ...result } = await verified.json();
+  assert.deepEqual(result, { ok: true });
+  assert.ok(Number.isInteger(latencyMs) && latencyMs >= 0);
+  assert.equal(upstream.mock.callCount(), 2);
   assert.equal(upstream.mock.calls[1].arguments[1].headers.Authorization, `Bearer ${apiKey}`);
   const deleted = await call(endpoint, { token, method: 'DELETE' });
   assert.equal(deleted.status, 200);
